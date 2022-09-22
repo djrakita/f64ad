@@ -1,0 +1,18 @@
+[package]
+name = "f64ad_core_derive"
+version = "0.0.1"
+description = "A library for easily adding automatic differentiation to Rust."
+edition = "2021"
+keywords = ["math", "autodiff", "ad"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/djrakita/f64ad"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "1.0.99", features = ["full" ,"extra-traits"] }
+quote = "1.0.21"
+f64ad_core = { path = "../f64ad_core", version = "0.0.1"}
