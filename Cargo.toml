@@ -16,8 +16,8 @@ members = [
 ]
 
 [dependencies]
-# f64ad_core = {path = "f64ad_core", version = "0.0.1"}
-# f64ad_core_derive = { path = "f64ad_core_derive", version = "0.0.1" }
+f64ad_core = {path = "f64ad_core", version = "0.0.1"}
+f64ad_core_derive = { path = "f64ad_core_derive", version = "0.0.1" }
 nalgebra = "0.31.1"
 ndarray = "0.15.6"
 rayon = "1.5.3"
