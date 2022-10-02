@@ -1,11 +1,19 @@
+use std::borrow::BorrowMut;
 use std::cell::{RefCell};
-use std::fmt::{Debug, Formatter};
-use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use std::cmp::Ordering;
+use std::fmt::{Debug, Display, Formatter};
+use std::iter::Sum;
+use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Rem, RemAssign, Sub, SubAssign};
 use once_cell::sync::OnceCell;
 pub mod trait_impls;
 
+/// Note that there is nothing about f64ad itself that cannot be Copy.  The only thing preventing
+/// this is the implementation of Drop.  While it would be super, super useful for this to be Copy
+/// as well, as there wouldn't be any trivial .clone() functions littered in code, the Rust
+/// compiler does not allow both Copy and Drop implementations right now, and I have to favor Drop
+/// in order to keep memory management reasonable for AD.
 #[allow(non_camel_case_types)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum f64ad {
     f64ad_var(f64ad_var),
     f64(f64)
@@ -19,7 +27,7 @@ impl f64ad {
     }
     pub fn unwrap_f64ad_var(&self) -> f64ad_var {
         match self {
-            f64ad::f64ad_var(v) => { *v }
+            f64ad::f64ad_var(v) => { v.clone() }
             _ => { panic!("wrong type.") }
         }
     }
@@ -44,7 +52,7 @@ impl f64ad {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy)]
 pub struct f64ad_var {
     pub node_idx: usize,
     reset_idx: usize,
@@ -54,12 +62,15 @@ impl f64ad_var {
     pub fn new_from_node_idx(node_idx: usize, tape: &'static Tape) -> Self {
         Self {
             node_idx,
-            reset_idx: tape.reset_idx,
+            reset_idx: tape.reset_idx.borrow().clone(),
             tape
         }
     }
+    pub fn new_manual(value: f64, parent_node_idxs: Vec<usize>, derivatives_mode: DerivativesMode, tape: &'static Tape) -> Self {
+        return tape.add_node(value, parent_node_idxs, derivatives_mode);
+    }
     pub fn value(&self) -> f64 {
-        assert_eq!(self.tape.reset_idx, self.reset_idx);
+        assert_eq!(self.tape.reset_idx.borrow().clone(), self.reset_idx);
 
         return self.tape.nodes.borrow()[self.node_idx].value
     }
@@ -109,7 +120,7 @@ impl f64ad_var {
                         assert_eq!(derivatives.len(), parent_node_idxs.len());
                         for (i, parent_node_idx) in parent_node_idxs.iter().enumerate() {
                             if !(derivatives[i].value() == 0.0 || dependency_node.value() == 0.0) {
-                                derivs[*parent_node_idx] += f64ad::f64ad_var(derivatives[i]) * dependency_node;
+                                derivs[*parent_node_idx] += f64ad::f64ad_var(derivatives[i].clone()) * dependency_node.clone();
                             }
                         }
                     }
@@ -175,10 +186,10 @@ impl f64ad_var {
                         let parent_node_idxs = node.parent_node_idxs;
                         assert_eq!(parent_node_idxs.len(), derivatives.len());
                         for (i, parent_node_idx) in parent_node_idxs.iter().enumerate() {
-                            let parent_node = self.tape.nodes.borrow()[*parent_node_idx].clone();
+                            // let parent_node = self.tape.nodes.borrow()[*parent_node_idx].clone();
                             // if derivs[parent_node.node_idx].is_some() {
-                                let dependency_node = derivs[*parent_node_idx].clone();
-                                derivs[successor_node_idx] += f64ad::f64ad_var(derivatives[i]) * dependency_node;
+                            let dependency_node = derivs[*parent_node_idx].clone();
+                            derivs[successor_node_idx] += f64ad::f64ad_var(derivatives[i].clone()) * dependency_node;
                             // }
                         }
                     }
@@ -207,7 +218,7 @@ impl BackwardsModeGradOutput {
     pub fn wrt(&self, input: &f64ad) -> f64ad {
         match input {
             f64ad::f64ad_var(input) => {
-                assert_eq!(input.tape.reset_idx, input.reset_idx);
+                assert_eq!(input.tape.reset_idx.borrow().clone(), input.reset_idx);
                 let idx = input.node_idx;
                 return self.derivs[idx];
             }
@@ -226,7 +237,7 @@ impl ForwardModeGradOutput {
     pub fn wrt(&self, output: &f64ad) -> f64ad {
         match output {
             f64ad::f64ad_var(output) => {
-                assert_eq!(output.tape.reset_idx, output.reset_idx);
+                assert_eq!(output.tape.reset_idx.borrow().clone(), output.reset_idx);
                 let idx = output.node_idx;
                 return self.derivs[idx];
             }
@@ -241,6 +252,8 @@ impl ForwardModeGradOutput {
 pub struct F64ADNode {
     value: f64,
     node_idx: usize,
+    num_f64ad_references: usize,
+    ready_for_drop: bool,
     parent_node_idxs: Vec<usize>,
     child_node_idxs: Vec<usize>,
     derivatives_mode: DerivativesMode
@@ -305,28 +318,42 @@ impl DerivativeFunction for ConstantDerivativeFunction {
 pub struct Tape {
     nodes: RefCell<Vec<F64ADNode>>,
     thread_idx: usize,
-    reset_idx: usize
+    reset_idx: RefCell<usize>
 }
 impl Tape {
     fn new(reset_idx: usize, thread_idx: usize) -> Self {
         Self {
             nodes: RefCell::new(vec![]),
             thread_idx,
-            reset_idx,
+            reset_idx: RefCell::new(reset_idx),
         }
+    }
+    pub fn spawn_variable(&'static self, value: f64) -> f64ad {
+        let mut out_var = self.add_variable(value);
+        // out_var.tape.nodes.borrow_mut()[out_var.node_idx].num_f64ad_references += 1;
+        return f64ad::f64ad_var(out_var);
+    }
+    pub fn spawn_constant(&'static self, value: f64) -> f64ad {
+        return f64ad::f64(value);
+    }
+    pub fn reset(&self) {
+        *self.reset_idx.borrow_mut() += 1;
+        self.nodes.borrow_mut().clear();
     }
     pub fn add_variable(&'static self, value: f64) -> f64ad_var {
         let l = self.len();
         self.nodes.borrow_mut().push(F64ADNode {
             value,
             node_idx: l,
+            num_f64ad_references: 1,
+            ready_for_drop: false,
             parent_node_idxs: vec![],
             child_node_idxs: vec![],
             derivatives_mode: DerivativesMode::Completed(vec![])
         });
         f64ad_var {
             node_idx: l,
-            reset_idx: self.reset_idx,
+            reset_idx: self.reset_idx.borrow().clone(),
             tape: &self
         }
     }
@@ -338,13 +365,15 @@ impl Tape {
         self.nodes.borrow_mut().push(F64ADNode {
             value,
             node_idx,
+            num_f64ad_references: 1,
+            ready_for_drop: false,
             parent_node_idxs,
             child_node_idxs: vec![],
             derivatives_mode: derivatives
         });
         return f64ad_var {
             node_idx,
-            reset_idx: self.reset_idx,
+            reset_idx: self.reset_idx.borrow().clone(),
             tape: self
         };
     }
@@ -366,7 +395,7 @@ impl GlobalTape {
     pub fn reset() {
         unsafe {
             let tape = _GLOBAL_TAPE.take().unwrap();
-            let reset_idx = tape.reset_idx;
+            let reset_idx = tape.reset_idx.borrow().clone();
             _GLOBAL_TAPE.set(Tape::new(reset_idx+1, 0)).unwrap();
         }
     }
@@ -393,7 +422,7 @@ impl GlobalTapeParallel {
     pub fn reset_all_threads() {
         unsafe {
             let tapes = _GLOBAL_TAPE_PARALLEL.take().unwrap();
-            let reset_idx = tapes[0].reset_idx;
+            let reset_idx = tapes[0].reset_idx.borrow().clone();
 
             let n = num_cpus::get();
             let mut v = vec![];
@@ -463,13 +492,19 @@ impl Add<f64> for f64ad_var {
 
 impl AddAssign<f64ad_var> for f64ad_var {
     fn add_assign(&mut self, rhs: f64ad_var) {
-        *self = *self + rhs;
+        *self = self.clone() + rhs;
     }
 }
 
 impl AddAssign<f64> for f64ad_var {
     fn add_assign(&mut self, rhs: f64) {
-        *self = *self + rhs;
+        *self = self.clone() + rhs;
+    }
+}
+
+impl Sum<f64ad_var> for f64ad_var {
+    fn sum<I: Iterator<Item=f64ad_var>>(iter: I) -> Self {
+         iter.reduce(|a, b| a + b).unwrap()
     }
 }
 
@@ -479,13 +514,13 @@ impl Add<f64ad> for f64ad {
     fn add(self, rhs: f64ad) -> Self::Output {
         return match (&self, &rhs) {
             (f64ad::f64ad_var(f1), f64ad::f64ad_var(f2)) => {
-                f64ad::f64ad_var(*f1 + *f2)
+                f64ad::f64ad_var(f1.clone() + f2.clone())
             }
             (f64ad::f64ad_var(f1), f64ad::f64(f2)) => {
-                f64ad::f64ad_var(*f1 + *f2)
+                f64ad::f64ad_var(f1.clone() + *f2)
             }
             (f64ad::f64(f1), f64ad::f64ad_var(f2)) => {
-                f64ad::f64ad_var(*f1 + *f2)
+                f64ad::f64ad_var(*f1 + f2.clone())
             }
             (f64ad::f64(f1), f64ad::f64(f2)) => {
                 f64ad::f64(*f1 + *f2)
@@ -495,7 +530,13 @@ impl Add<f64ad> for f64ad {
 }
 impl AddAssign<f64ad> for f64ad {
     fn add_assign(&mut self, rhs: f64ad) {
-        *self = *self + rhs;
+        *self = self.clone() + rhs;
+    }
+}
+
+impl Sum<f64ad> for f64ad {
+    fn sum<I: Iterator<Item=f64ad>>(iter: I) -> Self {
+         iter.reduce(|a, b| a + b).unwrap()
     }
 }
 
@@ -569,13 +610,39 @@ impl DerivativeFunction for SubLeft1ParentDerivative {
 
 impl SubAssign<f64ad_var> for f64ad_var {
     fn sub_assign(&mut self, rhs: f64ad_var) {
-        *self = *self - rhs;
+        *self = self.clone() - rhs;
     }
 }
 
 impl SubAssign<f64> for f64ad_var {
     fn sub_assign(&mut self, rhs: f64) {
-        *self = *self - rhs;
+        *self = self.clone() - rhs;
+    }
+}
+
+impl Sub<f64ad> for f64ad {
+    type Output = f64ad;
+
+    fn sub(self, rhs: f64ad) -> Self::Output {
+        return match (&self, &rhs) {
+            (f64ad::f64ad_var(f1), f64ad::f64ad_var(f2)) => {
+                f64ad::f64ad_var(f1.clone() - f2.clone())
+            }
+            (f64ad::f64ad_var(f1), f64ad::f64(f2)) => {
+                f64ad::f64ad_var(f1.clone() - *f2)
+            }
+            (f64ad::f64(f1), f64ad::f64ad_var(f2)) => {
+                f64ad::f64ad_var(*f1 - f2.clone())
+            }
+            (f64ad::f64(f1), f64ad::f64(f2)) => {
+                f64ad::f64(*f1 - *f2)
+            }
+        }
+    }
+}
+impl SubAssign<f64ad> for f64ad {
+    fn sub_assign(&mut self, rhs: f64ad) {
+        *self = self.clone() - rhs;
     }
 }
 
@@ -597,14 +664,8 @@ impl DerivativeFunction for Mul2ParentsDerivative {
     fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
         assert_eq!(operand_node_idxs.len(), 2);
 
-        // let parent1 = tape.nodes.borrow()[operand_node_idxs[0]].clone();
-        // let parent2 = tape.nodes.borrow()[operand_node_idxs[1]].clone();
-
         let out1 = f64ad_var::new_from_node_idx(operand_node_idxs[1], tape);
         let out2 = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        // let out1 = tape.add_node(parent2.value, operand_node_idxs.clone(), DerivativesMode::Deferred(DerivativeFunctionBox(Box::new(ConstantDerivativeFunction))));
-        // let out2 = tape.add_node(parent1.value, operand_node_idxs.clone(), DerivativesMode::Deferred(DerivativeFunctionBox(Box::new(ConstantDerivativeFunction))));
 
         let mut out = vec![
             out1, out2
@@ -646,13 +707,13 @@ impl Mul<f64> for f64ad_var {
 
 impl MulAssign<f64ad_var> for f64ad_var {
     fn mul_assign(&mut self, rhs: f64ad_var) {
-        *self = *self * rhs;
+        *self = self.clone() * rhs;
     }
 }
 
 impl MulAssign<f64> for f64ad_var {
     fn mul_assign(&mut self, rhs: f64) {
-        *self = *self * rhs;
+        *self = self.clone() * rhs;
     }
 }
 
@@ -662,13 +723,13 @@ impl Mul<f64ad> for f64ad {
     fn mul(self, rhs: f64ad) -> Self::Output {
         return match (&self, &rhs) {
             (f64ad::f64ad_var(f1), f64ad::f64ad_var(f2)) => {
-                f64ad::f64ad_var(*f1 * *f2)
+                f64ad::f64ad_var(f1.clone() * f2.clone())
             }
             (f64ad::f64ad_var(f1), f64ad::f64(f2)) => {
-                f64ad::f64ad_var(*f1 * *f2)
+                f64ad::f64ad_var(f1.clone() * *f2)
             }
             (f64ad::f64(f1), f64ad::f64ad_var(f2)) => {
-                f64ad::f64ad_var(*f1 * *f2)
+                f64ad::f64ad_var(*f1 * f2.clone())
             }
             (f64ad::f64(f1), f64ad::f64(f2)) => {
                 f64ad::f64(*f1 * *f2)
@@ -678,20 +739,7 @@ impl Mul<f64ad> for f64ad {
 }
 impl MulAssign<f64ad> for f64ad {
     fn mul_assign(&mut self, rhs: f64ad) {
-        match (self, &rhs) {
-            (f64ad::f64ad_var(f1), f64ad::f64ad_var(f2)) => {
-                *f1 = *f1 * *f2;
-            }
-            (f64ad::f64ad_var(f1), f64ad::f64(f2)) => {
-                *f1 = *f1 * *f2;
-            }
-            (f64ad::f64(f1), f64ad::f64ad_var(f2)) => {
-                *f1 = *f1 * f2.value();
-            }
-            (f64ad::f64(f1), f64ad::f64(f2)) => {
-                *f1 = *f1 * *f2;
-            }
-        }
+        *self = self.clone() * rhs;
     }
 }
 
@@ -718,18 +766,10 @@ impl DerivativeFunction for Div2ParentsDerivative {
     fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
         assert_eq!(operand_node_idxs.len(), 2);
 
-        let operand1_f64ad = f64ad_var {
-            node_idx: operand_node_idxs[0],
-            reset_idx: tape.reset_idx,
-            tape
-        };
-        let operand2_f64ad = f64ad_var {
-            node_idx: operand_node_idxs[1],
-            reset_idx: tape.reset_idx,
-            tape
-        };
+        let operand1_f64ad = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
+        let operand2_f64ad = f64ad_var::new_from_node_idx(operand_node_idxs[1], tape);
 
-        let out1 = 1.0 / operand2_f64ad;
+        let out1 = 1.0 / operand2_f64ad.clone();
         let out2 = -1.0 * (operand1_f64ad / (operand2_f64ad.internal_powf(2.0)));
 
         return vec![out1, out2];
@@ -752,11 +792,7 @@ impl DerivativeFunction for DivDenominator1ParentDerivative {
     fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
         assert_eq!(operand_node_idxs.len(), 1);
 
-        let operand_f64ad = f64ad_var {
-            node_idx: operand_node_idxs[0],
-            reset_idx: tape.reset_idx,
-            tape
-        };
+        let operand_f64ad = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
 
         let out = -self.numerator / (operand_f64ad.internal_powf(2.0));
 
@@ -796,7 +832,7 @@ impl Neg for f64ad_var {
     }
 }
 
-// POWF //
+// POW //
 
 pub trait Powf<T> {
     type Output;
@@ -832,11 +868,11 @@ impl DerivativeFunction for PowfBase1ParentDerivative {
     fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
         assert_eq!(operand_node_idxs.len(), 1);
 
-        let operand_f64ad = f64ad_var {
-            node_idx: operand_node_idxs[0],
-            reset_idx: tape.reset_idx,
-            tape
-        };
+        let operand_f64ad = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
+
+        if self.n == 0.0 && operand_f64ad.value() == 0.0 {
+            return vec![f64ad_var::new_manual(0.0, operand_node_idxs.clone(), DerivativesMode::new_deferred(ConstantDerivativeFunction), tape)];
+        }
 
         let out = self.n * operand_f64ad.internal_powf(self.n - 1.0);
 
@@ -844,11 +880,20 @@ impl DerivativeFunction for PowfBase1ParentDerivative {
     }
 }
 
-// Square root //
+impl f64ad_var {
+    pub fn internal_powi(&self, n: i32) -> Self {
+        return self.internal_powf(n as f64);
+    }
+}
+
+// Roots //
 
 impl f64ad_var {
     pub fn internal_sqrt(&self) -> Self {
         return self.internal_powf(0.5);
+    }
+    pub fn internal_cbrt(&self) -> Self {
+        return self.internal_powf(1.0/3.0);
     }
 }
 
@@ -1146,7 +1191,7 @@ impl f64ad_var {
         return self.internal_log(2.0);
     }
     pub fn internal_ln_1p(&self) -> Self {
-        return (*self + 1.0).internal_ln();
+        return (self.clone() + 1.0).internal_ln();
     }
 }
 
@@ -1181,4 +1226,155 @@ impl DerivativeFunction for LogDerivative {
     }
 }
 
+// Exponentials //
 
+impl f64ad_var {
+    pub fn internal_exp(&self) -> Self {
+        let tape = self.tape;
+        tape.add_node(self.value().exp(), vec![self.node_idx], DerivativesMode::new_deferred(ExpDerivative))
+    }
+    pub fn internal_exp2(&self) -> Self {
+        let tape = self.tape;
+        tape.add_node(self.value().exp2(), vec![self.node_idx], DerivativesMode::new_deferred(Exp2Derivative))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ExpDerivative;
+impl DerivativeFunction for ExpDerivative {
+    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
+        assert_eq!(operand_node_idxs.len(), 1);
+
+        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
+
+        let out = operand_f64ad_var.internal_exp();
+
+        return vec![out];
+
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Exp2Derivative;
+impl DerivativeFunction for Exp2Derivative {
+    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
+        assert_eq!(operand_node_idxs.len(), 1);
+
+        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
+
+        let out = operand_f64ad_var.internal_exp2() * 2_f64.ln();
+
+        return vec![out];
+
+    }
+}
+
+// Abs //
+
+impl f64ad_var {
+    pub fn internal_abs(&self) -> Self {
+        let tape = self.tape;
+        tape.add_node(self.value().abs(), vec![self.node_idx], DerivativesMode::new_deferred(AbsDerivative))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AbsDerivative;
+impl DerivativeFunction for AbsDerivative {
+    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
+        assert_eq!(operand_node_idxs.len(), 1);
+
+        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
+
+        let val = operand_f64ad_var.value();
+        if val >= 0.0 {
+            return vec![f64ad_var::new_manual(1.0, operand_node_idxs.clone(), DerivativesMode::new_deferred(ConstantDerivativeFunction), tape)];
+        } else {
+            return vec![f64ad_var::new_manual(-1.0, operand_node_idxs.clone(), DerivativesMode::new_deferred(ConstantDerivativeFunction), tape)];
+        }
+    }
+}
+
+// Floor, Ceil, Round, Rem //
+
+impl f64ad_var {
+    pub fn internal_floor(&self) -> Self {
+        let tape = self.tape;
+        tape.add_node(self.value().floor(), vec![self.node_idx], DerivativesMode::new_deferred(ConstantDerivativeFunction))
+    }
+    pub fn internal_ceil(&self) -> Self {
+        let tape = self.tape;
+        tape.add_node(self.value().ceil(), vec![self.node_idx], DerivativesMode::new_deferred(ConstantDerivativeFunction))
+    }
+    pub fn internal_round(&self) -> Self {
+        let tape = self.tape;
+        tape.add_node(self.value().round(), vec![self.node_idx], DerivativesMode::new_deferred(ConstantDerivativeFunction))
+    }
+}
+
+impl Rem for f64ad_var {
+    type Output = f64ad_var;
+
+    fn rem(self, rhs: Self) -> Self::Output {
+        let val = rhs.value();
+        if val == 0.0 {
+            panic!("modulo by zero.");
+        }
+
+        return self - rhs * (self / rhs).internal_floor();
+    }
+}
+impl RemAssign for f64ad_var {
+    fn rem_assign(&mut self, rhs: Self) {
+        *self = *self % rhs;
+    }
+}
+
+impl Rem<f64> for f64ad_var {
+    type Output = f64ad_var;
+
+    fn rem(self, rhs: f64) -> Self::Output {
+        if rhs == 0.0 {
+            panic!("modulo by zero.");
+        }
+
+        return self - rhs * (self / rhs).internal_floor();
+    }
+}
+impl RemAssign<f64> for f64ad_var {
+    fn rem_assign(&mut self, rhs: f64) {
+        *self = *self % rhs;
+    }
+}
+
+impl Rem<f64ad_var> for f64 {
+    type Output = f64ad_var;
+
+    fn rem(self, rhs: f64ad_var) -> Self::Output {
+        if rhs.value() == 0.0 {
+            panic!("modulo by zero.");
+        }
+
+        return self - rhs * (self / rhs).internal_floor();
+    }
+}
+
+/////////////
+
+impl Display for f64ad {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        todo!()
+    }
+}
+
+impl PartialEq for f64ad {
+    fn eq(&self, other: &Self) -> bool {
+        return self.value() == other.value();
+    }
+}
+
+impl PartialOrd for f64ad {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        return self.value().partial_cmp(&other.value());
+    }
+}
