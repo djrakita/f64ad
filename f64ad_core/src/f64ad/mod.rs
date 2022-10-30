@@ -1,17 +1,14 @@
+/*
 use std::borrow::BorrowMut;
 use std::cell::{RefCell};
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
 use std::iter::Sum;
 use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Rem, RemAssign, Sub, SubAssign};
+use std::time::Instant;
 use once_cell::sync::OnceCell;
 pub mod trait_impls;
 
-/// Note that there is nothing about f64ad itself that cannot be Copy.  The only thing preventing
-/// this is the implementation of Drop.  While it would be super, super useful for this to be Copy
-/// as well, as there wouldn't be any trivial .clone() functions littered in code, the Rust
-/// compiler does not allow both Copy and Drop implementations right now, and I have to favor Drop
-/// in order to keep memory management reasonable for AD.
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone, Copy)]
 pub enum f64ad {
@@ -1378,3 +1375,4 @@ impl PartialOrd for f64ad {
         return self.value().partial_cmp(&other.value());
     }
 }
+*/
