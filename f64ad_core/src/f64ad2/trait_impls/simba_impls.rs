@@ -1,7 +1,7 @@
 use num_traits::{Signed, Zero};
 use simba::scalar::{ComplexField, Field, RealField, SubsetOf, SupersetOf};
 use tinyvec::tiny_vec;
-use crate::f64ad2::{f64ad, f64ad_locked_var_operation_one_parent, f64ad_locked_var_operation_two_parents, NodeType};
+use crate::f64ad2::{ComputationGraphMode, f64ad, f64ad_locked_var_operation_one_parent, f64ad_locked_var_operation_two_parents, NodeType};
 
 impl RealField for f64ad {
     fn is_sign_positive(&self) -> bool {
@@ -106,7 +106,43 @@ impl RealField for f64ad {
     }
 
     fn atan2(self, other: Self) -> Self {
-        todo!()
+        match (&self, &other) {
+            (f64ad::f64ad_var(v1), f64ad::f64ad_var(v2)) => {
+                assert_eq!(v1.computation_graph_id, v2.computation_graph_id);
+                let res = unsafe {
+                    (*v1.computation_graph.0).add_node(NodeType::Atan2TwoParents, tiny_vec!([u32; 2] => v1.node_idx, v2.node_idx), tiny_vec!([f64; 1]))
+                };
+                return f64ad::f64ad_var(res);
+            }
+            (f64ad::f64ad_locked_var(v1), f64ad::f64ad_locked_var(v2)) => {
+                let res = f64ad_locked_var_operation_two_parents(v1, v2, NodeType::Atan2TwoParents);
+                return f64ad::f64ad_locked_var(res);
+            }
+            (f64ad::f64(v1), f64ad::f64(v2)) => {
+                return f64ad::f64(v1.atan2(*v2))
+            }
+            (f64ad::f64ad_var(_), f64ad::f64ad_locked_var(_)) => { panic!("unsupported.") }
+            (f64ad::f64ad_locked_var(_), f64ad::f64ad_var(_)) => { panic!("unsupported.") }
+            (f64ad::f64ad_var(v1), f64ad::f64(v2)) => {
+                let res = unsafe {
+                    (*v1.computation_graph.0).add_node(NodeType::Atan2OneParentLeft, tiny_vec!([u32; 2] => v1.node_idx), tiny_vec!([f64; 1] => *v2))
+                };
+                return f64ad::f64ad_var(res);
+            }
+            (f64ad::f64(v1), f64ad::f64ad_var(v2)) => {
+                let res = unsafe {
+                    (*v2.computation_graph.0).add_node(NodeType::Atan2OneParentRight, tiny_vec!([u32; 2] => v2.node_idx), tiny_vec!([f64; 1] => *v1))
+                };
+                return f64ad::f64ad_var(res);
+            }
+            (f64ad::f64ad_locked_var(v1), f64ad::f64(v2)) => {
+                let res = f64ad_locked_var_operation_one_parent(v1, Some(*v2), NodeType::Atan2OneParentLeft);
+                return f64ad::f64ad_locked_var(res);
+            }
+            (f64ad::f64(v1), f64ad::f64ad_locked_var(v2)) => {
+                let res = f64ad_locked_var_operation_one_parent(v2, Some(*v1), NodeType::Atan2OneParentRight);
+                return f64ad::f64ad_locked_var(res);            }
+        }
     }
 
     fn min_value() -> Option<Self> {
@@ -134,47 +170,47 @@ impl RealField for f64ad {
     }
 
     fn frac_pi_4() -> Self {
-        todo!()
+        f64ad::f64(std::f64::consts::FRAC_PI_4)
     }
 
     fn frac_pi_6() -> Self {
-        todo!()
+        f64ad::f64(std::f64::consts::FRAC_PI_6)
     }
 
     fn frac_pi_8() -> Self {
-        todo!()
+        f64ad::f64(std::f64::consts::FRAC_PI_8)
     }
 
     fn frac_1_pi() -> Self {
-        todo!()
+        f64ad::f64(std::f64::consts::FRAC_1_PI)
     }
 
     fn frac_2_pi() -> Self {
-        todo!()
+        f64ad::f64(std::f64::consts::FRAC_2_PI)
     }
 
     fn frac_2_sqrt_pi() -> Self {
-        todo!()
+        f64ad::f64(std::f64::consts::FRAC_2_SQRT_PI)
     }
 
     fn e() -> Self {
-        todo!()
+        f64ad::f64(std::f64::consts::E)
     }
 
     fn log2_e() -> Self {
-        todo!()
+        f64ad::f64(std::f64::consts::LOG2_E)
     }
 
     fn log10_e() -> Self {
-        todo!()
+        f64ad::f64(std::f64::consts::LOG10_E)
     }
 
     fn ln_2() -> Self {
-        todo!()
+        f64ad::f64(std::f64::consts::LN_2)
     }
 
     fn ln_10() -> Self {
-        todo!()
+        f64ad::f64(std::f64::consts::LN_10)
     }
 }
 
@@ -190,11 +226,86 @@ impl ComplexField for f64ad {
     fn norm1(self) -> Self::RealField { return self.abs(); }
     fn scale(self, factor: Self::RealField) -> Self { return self * factor; }
     fn unscale(self, factor: Self::RealField) -> Self { return self / factor; }
-    fn floor(self) -> Self { todo!() }
-    fn ceil(self) -> Self { todo!() }
-    fn round(self) -> Self { todo!() }
-    fn trunc(self) -> Self { todo!() }
-    fn fract(self) -> Self { todo!() }
+    fn floor(self) -> Self {
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Floor, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Floor))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.floor())
+            }
+        }
+    }
+    fn ceil(self) -> Self {
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Ceil, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Ceil))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.ceil())
+            }
+        }
+    }
+    fn round(self) -> Self {
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Round, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Round))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.round())
+            }
+        }
+    }
+    fn trunc(self) -> Self {
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Trunc, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Trunc))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.trunc())
+            }
+        }
+    }
+    fn fract(self) -> Self {
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Fract, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Fract))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.fract())
+            }
+        }
+    }
     fn mul_add(self, a: Self, b: Self) -> Self { return (self * a) + b; }
     fn abs(self) -> Self::RealField {
         <Self as Signed>::abs(&self)
@@ -202,39 +313,335 @@ impl ComplexField for f64ad {
     fn hypot(self, other: Self) -> Self::RealField {
         return (self.powi(2) + other.powi(2)).sqrt();
     }
-    fn recip(self) -> Self { todo!() }
-    fn conjugate(self) -> Self { todo!() }
-    fn sin(self) -> Self { todo!() }
+    fn recip(self) -> Self { return 1.0/self; }
+    fn conjugate(self) -> Self { return self; }
+    fn sin(self) -> Self {
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Sin, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Sin))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.sin())
+            }
+        }
+    }
     fn cos(self) -> Self {
-        todo!()
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Cos, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Cos))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.cos())
+            }
+        }
     }
     fn sin_cos(self) -> (Self, Self) {
         return (self.sin(), self.cos())
     }
-    fn tan(self) -> Self { todo!() }
-    fn asin(self) -> Self { todo!() }
-    fn acos(self) -> Self { todo!() }
-    fn atan(self) -> Self { todo!() }
-    fn sinh(self) -> Self { todo!() }
-    fn cosh(self) -> Self { todo!() }
-    fn tanh(self) -> Self { todo!() }
-    fn asinh(self) -> Self { todo!() }
-    fn acosh(self) -> Self { todo!() }
-    fn atanh(self) -> Self { todo!() }
-    fn log(self, base: Self::RealField) -> Self { todo!() }
-    fn log2(self) -> Self { todo!() }
-    fn log10(self) -> Self { todo!() }
-    fn ln(self) -> Self { todo!() }
+    fn tan(self) -> Self {
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Tan, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Tan))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.tan())
+            }
+        }
+    }
+    fn asin(self) -> Self {
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Asin, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Asin))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.asin())
+            }
+        }
+    }
+    fn acos(self) -> Self {
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Acos, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Acos))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.acos())
+            }
+        }
+    }
+    fn atan(self) -> Self {
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Atan, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Atan))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.atan())
+            }
+        }
+    }
+    fn sinh(self) -> Self {
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Sinh, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Sinh))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.sinh())
+            }
+        }
+    }
+    fn cosh(self) -> Self {
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Cosh, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Cosh))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.cosh())
+            }
+        }
+    }
+    fn tanh(self) -> Self {
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Tanh, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Tanh))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.tanh())
+            }
+        }
+    }
+    fn asinh(self) -> Self {
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Asinh, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Asinh))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.asinh())
+            }
+        }
+    }
+    fn acosh(self) -> Self {
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Acosh, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Acosh))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.acosh())
+            }
+        }
+    }
+    fn atanh(self) -> Self {
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Atanh, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Atanh))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.atanh())
+            }
+        }
+    }
+    fn log(self, base: Self::RealField) -> Self {
+        match (&self, &base) {
+            (f64ad::f64ad_var(v1), f64ad::f64ad_var(v2)) => {
+                assert_eq!(v1.computation_graph_id, v2.computation_graph_id);
+                let res = unsafe {
+                    (*v1.computation_graph.0).add_node(NodeType::LogTwoParents, tiny_vec!([u32; 2] => v1.node_idx, v2.node_idx), tiny_vec!([f64; 1]))
+                };
+                return f64ad::f64ad_var(res);
+            }
+            (f64ad::f64ad_locked_var(v1), f64ad::f64ad_locked_var(v2)) => {
+                let res = f64ad_locked_var_operation_two_parents(v1, v2, NodeType::LogTwoParents);
+                return f64ad::f64ad_locked_var(res);
+            }
+            (f64ad::f64(v1), f64ad::f64(v2)) => {
+                return f64ad::f64(v1.log(*v2))
+            }
+            (f64ad::f64ad_var(_), f64ad::f64ad_locked_var(_)) => { panic!("unsupported.") }
+            (f64ad::f64ad_locked_var(_), f64ad::f64ad_var(_)) => { panic!("unsupported.") }
+            (f64ad::f64ad_var(v1), f64ad::f64(v2)) => {
+                let res = unsafe {
+                    (*v1.computation_graph.0).add_node(NodeType::LogOneParentArgument, tiny_vec!([u32; 2] => v1.node_idx), tiny_vec!([f64; 1] => *v2))
+                };
+                return f64ad::f64ad_var(res);
+            }
+            (f64ad::f64(v1), f64ad::f64ad_var(v2)) => {
+                let res = unsafe {
+                    (*v2.computation_graph.0).add_node(NodeType::LogOneParentBase, tiny_vec!([u32; 2] => v2.node_idx), tiny_vec!([f64; 1] => *v1))
+                };
+                return f64ad::f64ad_var(res);
+            }
+            (f64ad::f64ad_locked_var(v1), f64ad::f64(v2)) => {
+                let res = f64ad_locked_var_operation_one_parent(v1, Some(*v2), NodeType::LogOneParentArgument);
+                return f64ad::f64ad_locked_var(res);
+            }
+            (f64ad::f64(v1), f64ad::f64ad_locked_var(v2)) => {
+                let res = f64ad_locked_var_operation_one_parent(v2, Some(*v1), NodeType::LogOneParentBase);
+                return f64ad::f64ad_locked_var(res);            }
+        }
+    }
+    fn log2(self) -> Self { return self.log(f64ad::f64(2.0)) }
+    fn log10(self) -> Self { return self.log(f64ad::f64(10.0))}
+    fn ln(self) -> Self { return self.log(f64ad::f64(std::f64::consts::E)) }
     fn ln_1p(self) -> Self { todo!() }
-    fn sqrt(self) -> Self { todo!() }
-    fn exp(self) -> Self { todo!() }
+    fn sqrt(self) -> Self {
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Sqrt, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Sqrt))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.sqrt())
+            }
+        }
+    }
+    fn exp(self) -> Self {
+        return match &self {
+            f64ad::f64ad_var(f) => {
+                let res = unsafe {
+                    (*f.computation_graph.0).add_node(NodeType::Exp, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
+                };
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Exp))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.exp())
+            }
+        }
+    }
     fn exp2(self) -> Self { todo!() }
     fn exp_m1(self) -> Self { return self.exp() - 1.0; }
-    fn powi(self, n: i32) -> Self { todo!() }
-    fn powf(self, n: Self::RealField) -> Self { todo!() }
+    fn powi(self, n: i32) -> Self { return self.powf(f64ad::f64(n as f64)) }
+    fn powf(self, n: Self::RealField) -> Self {
+        match (&self, &n) {
+            (f64ad::f64ad_var(v1), f64ad::f64ad_var(v2)) => {
+                assert_eq!(v1.computation_graph_id, v2.computation_graph_id);
+                let res = unsafe {
+                    (*v1.computation_graph.0).add_node(NodeType::PowTwoParents, tiny_vec!([u32; 2] => v1.node_idx, v2.node_idx), tiny_vec!([f64; 1]))
+                };
+                return f64ad::f64ad_var(res);
+            }
+            (f64ad::f64ad_locked_var(v1), f64ad::f64ad_locked_var(v2)) => {
+                let res = f64ad_locked_var_operation_two_parents(v1, v2, NodeType::PowTwoParents);
+                return f64ad::f64ad_locked_var(res);
+            }
+            (f64ad::f64(v1), f64ad::f64(v2)) => {
+                return f64ad::f64(v1.powf(*v2))
+            }
+            (f64ad::f64ad_var(_), f64ad::f64ad_locked_var(_)) => { panic!("unsupported.") }
+            (f64ad::f64ad_locked_var(_), f64ad::f64ad_var(_)) => { panic!("unsupported.") }
+            (f64ad::f64ad_var(v1), f64ad::f64(v2)) => {
+                let res = unsafe {
+                    (*v1.computation_graph.0).add_node(NodeType::PowOneParentArgument, tiny_vec!([u32; 2] => v1.node_idx), tiny_vec!([f64; 1] => *v2))
+                };
+                return f64ad::f64ad_var(res);
+            }
+            (f64ad::f64(v1), f64ad::f64ad_var(v2)) => {
+                let res = unsafe {
+                    (*v2.computation_graph.0).add_node(NodeType::PowOneParentExponent, tiny_vec!([u32; 2] => v2.node_idx), tiny_vec!([f64; 1] => *v1))
+                };
+                return f64ad::f64ad_var(res);
+            }
+            (f64ad::f64ad_locked_var(v1), f64ad::f64(v2)) => {
+                let res = f64ad_locked_var_operation_one_parent(v1, Some(*v2), NodeType::PowOneParentArgument);
+                return f64ad::f64ad_locked_var(res);
+            }
+            (f64ad::f64(v1), f64ad::f64ad_locked_var(v2)) => {
+                let res = f64ad_locked_var_operation_one_parent(v2, Some(*v1), NodeType::PowOneParentExponent);
+                return f64ad::f64ad_locked_var(res);            }
+        }
+    }
     fn powc(self, n: Self) -> Self { return self.powf(n); }
-    fn cbrt(self) -> Self { todo!() }
+    fn cbrt(self) -> Self { return self.powf(f64ad::f64(1.0/3.0)) }
     fn is_finite(&self) -> bool {
+        match self {
+            f64ad::f64ad_var(f) => {
+                unsafe {
+                    match &f.mode {
+                        ComputationGraphMode::Standard => { return f.value().is_finite() }
+                        ComputationGraphMode::Lock => { panic!("cannot call is_finite on computation graph of mode Lock.  Computation graph {}", (*f.computation_graph.0).name) }
+                    }
+                }
+            }
+            f64ad::f64ad_locked_var(_) => { panic!("cannot call is_finite on f64ad_locked_var."); }
+            f64ad::f64(f) => { return f.is_finite() }
+        }
         todo!()
     }
     fn try_sqrt(self) -> Option<Self> {
