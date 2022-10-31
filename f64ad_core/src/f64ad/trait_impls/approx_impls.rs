@@ -1,6 +1,6 @@
 use approx::{AbsDiffEq, RelativeEq, UlpsEq};
 use num_traits::Signed;
-use crate::f64ad2::f64ad;
+use crate::f64ad::f64ad;
 
 impl UlpsEq for f64ad {
     fn default_max_ulps() -> u32 {

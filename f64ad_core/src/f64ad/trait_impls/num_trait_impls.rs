@@ -1,6 +1,6 @@
 use num_traits::{FromPrimitive, Num, One, Signed, Zero};
 use tinyvec::tiny_vec;
-use crate::f64ad2::{f64ad, f64ad_locked_var_operation_one_parent, f64ad_var, NodeType};
+use crate::f64ad::{f64ad, f64ad_locked_var_operation_one_parent, NodeType};
 
 impl Zero for f64ad {
     fn zero() -> Self {

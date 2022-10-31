@@ -1,7 +1,7 @@
 use num_traits::{Signed, Zero};
 use simba::scalar::{ComplexField, Field, RealField, SubsetOf, SupersetOf};
 use tinyvec::tiny_vec;
-use crate::f64ad2::{ComputationGraphMode, f64ad, f64ad_locked_var_operation_one_parent, f64ad_locked_var_operation_two_parents, NodeType};
+use crate::f64ad::{ComputationGraphMode, f64ad, f64ad_locked_var_operation_one_parent, f64ad_locked_var_operation_two_parents, NodeType};
 
 impl RealField for f64ad {
     fn is_sign_positive(&self) -> bool {
@@ -642,7 +642,6 @@ impl ComplexField for f64ad {
             f64ad::f64ad_locked_var(_) => { panic!("cannot call is_finite on f64ad_locked_var."); }
             f64ad::f64(f) => { return f.is_finite() }
         }
-        todo!()
     }
     fn try_sqrt(self) -> Option<Self> {
         Some(self.sqrt())
@@ -651,30 +650,30 @@ impl ComplexField for f64ad {
 
 impl SubsetOf<f64ad> for f64ad {
     fn to_superset(&self) -> f64ad {
-        todo!()
+        self.clone()
     }
 
     fn from_superset_unchecked(element: &f64ad) -> Self {
-        todo!()
+        element.clone()
     }
 
-    fn is_in_subset(element: &f64ad) -> bool {
-        todo!()
+    fn is_in_subset(_element: &f64ad) -> bool {
+        true
     }
 }
 
 impl SupersetOf<f64> for f64ad {
     fn is_in_subset(&self) -> bool {
-        todo!()
+        true
     }
 
     fn to_subset_unchecked(&self) -> f64 {
-        todo!()
+        self.value()
     }
 
     fn from_subset(element: &f64) -> Self {
-        todo!()
+        f64ad::f64(element.clone())
     }
 }
 
-impl Field for f64ad {}
+impl Field for f64ad { }

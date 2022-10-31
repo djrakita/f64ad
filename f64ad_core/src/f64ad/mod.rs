@@ -1,228 +1,149 @@
-/*
-use std::borrow::BorrowMut;
-use std::cell::{RefCell};
+pub mod trait_impls;
+
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
-use std::iter::Sum;
-use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Rem, RemAssign, Sub, SubAssign};
-use std::time::Instant;
-use once_cell::sync::OnceCell;
-pub mod trait_impls;
+use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Rem, RemAssign, Sub, SubAssign};
+use rand::prelude::*;
+use simba::scalar::ComplexField;
+use tinyvec::*;
 
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone, Copy)]
 pub enum f64ad {
     f64ad_var(f64ad_var),
+    f64ad_locked_var(f64ad_locked_var),
     f64(f64)
 }
 impl f64ad {
     pub fn value(&self) -> f64 {
-        match self {
-            f64ad::f64ad_var(v) => { v.value() }
-            f64ad::f64(v) => { *v }
+        return match self {
+            f64ad::f64ad_var(f) => {f.value()}
+            f64ad::f64ad_locked_var(f) => { f.value() }
+            f64ad::f64(f) => { *f }
         }
     }
-    pub fn unwrap_f64ad_var(&self) -> f64ad_var {
+    pub fn node_idx(&self) -> u32 {
         match self {
-            f64ad::f64ad_var(v) => { v.clone() }
-            _ => { panic!("wrong type.") }
+            f64ad::f64ad_var(a) => { a.node_idx }
+            f64ad::f64ad_locked_var(a) => { a.node_idx }
+            f64ad::f64(_) => { panic!("no node idx on f64.") }
         }
     }
-    pub fn unwrap_f64(&self) -> f64 {
+    pub fn forward_mode_grad(&self, add_to_computation_graph: bool) -> ForwardModeGradOutput {
+        let v = self.value();
+        assert!(!v.is_nan() && v.is_finite());
         match self {
-            f64ad::f64(v) => { *v }
-            _ => { panic!("wrong type.") }
+            f64ad::f64ad_var(f) => { f.forward_mode_grad(add_to_computation_graph) }
+            _ => { panic!("cannot compute grad on f64.") }
         }
     }
-    pub fn backwards_mode_grad(&self) -> BackwardsModeGradOutput {
+    pub fn backwards_mode_grad(&self, add_to_computation_graph: bool) -> BackwardsModeGradOutput {
+        let v = self.value();
+        assert!(!v.is_nan() && v.is_finite());
         match self {
-            f64ad::f64ad_var(v) => { v.backwards_mode_grad() }
-            f64ad::f64(_) => { panic!("cannot compute grad on f64.") }
-        }
-    }
-    pub fn forward_mode_grad(&self) -> ForwardModeGradOutput {
-        match self {
-            f64ad::f64ad_var(v) => { v.forward_mode_grad() }
-            f64ad::f64(_) => { panic!("cannot compute grad on f64.") }
+            f64ad::f64ad_var(f) => { f.backwards_mode_grad(add_to_computation_graph) }
+            _ => { panic!("cannot compute grad on f64.") }
         }
     }
 }
+impl Default for f64ad {
+    fn default() -> Self {
+        Self::f64(0.0)
+    }
+}
+unsafe impl Sync for f64ad {  }
 
 #[allow(non_camel_case_types)]
 #[derive(Clone, Copy)]
 pub struct f64ad_var {
-    pub node_idx: usize,
-    reset_idx: usize,
-    tape: &'static Tape
+    computation_graph_id: usize,
+    node_idx: u32,
+    mode: ComputationGraphMode,
+    computation_graph: ComputationGraphRawPointer
 }
 impl f64ad_var {
-    pub fn new_from_node_idx(node_idx: usize, tape: &'static Tape) -> Self {
+    pub (crate) fn value(&self) -> f64 {
+        return unsafe {
+            (*self.computation_graph.0).nodes[self.node_idx as usize].value
+        }
+    }
+    pub (crate) fn new(computation_graph_id: usize, node_idx: u32, mode: ComputationGraphMode, computation_graph: *mut ComputationGraph) -> Self {
         Self {
+            computation_graph_id,
             node_idx,
-            reset_idx: tape.reset_idx.borrow().clone(),
-            tape
+            mode,
+            computation_graph: ComputationGraphRawPointer(computation_graph)
         }
     }
-    pub fn new_manual(value: f64, parent_node_idxs: Vec<usize>, derivatives_mode: DerivativesMode, tape: &'static Tape) -> Self {
-        return tape.add_node(value, parent_node_idxs, derivatives_mode);
-    }
-    pub fn value(&self) -> f64 {
-        assert_eq!(self.tape.reset_idx.borrow().clone(), self.reset_idx);
+    fn forward_mode_grad(&self, add_to_computation_graph: bool) -> ForwardModeGradOutput {
+        unsafe {
+            let l = (*self.computation_graph.0).nodes.len();
+            let mut derivs = vec![f64ad::f64(0.0); l];
+            if add_to_computation_graph {
+                let computation_graph = &mut (*self.computation_graph.0);
+                let v = computation_graph.spawn_f64ad_var(1.0);
+                derivs[self.node_idx as usize] = v;
+            } else {
+                derivs[self.node_idx as usize] = f64ad::f64(1.0);
+            }
 
-        return self.tape.nodes.borrow()[self.node_idx].value
-    }
-    pub fn backwards_mode_grad(&self) -> BackwardsModeGradOutput {
-        let n = self.tape.len();
-        let mut derivs = vec![f64ad::f64(0.0); n];
-        derivs[self.node_idx] = f64ad::f64(1.0);
-        let mut already_in_dependencies = vec![false; n];
-        already_in_dependencies[self.node_idx] = true;
-
-        let mut stack = vec![self.node_idx];
-        while !stack.is_empty() {
-            let curr_idx = stack.pop().unwrap();
-            let curr_node = &self.tape.nodes.borrow()[curr_idx];
-            let parent_node_idxs = &curr_node.parent_node_idxs;
-            for parent_node_idx in parent_node_idxs {
-                if !already_in_dependencies[*parent_node_idx] {
-                    stack.push(*parent_node_idx);
-                    already_in_dependencies[*parent_node_idx] = true;
+            let computation_graph = &mut (*self.computation_graph.0);
+            for node_idx in 0..l {
+                let node = &computation_graph.nodes[node_idx];
+                let node_type = node.node_type.clone();
+                let parent_nodes = node.parent_nodes.clone();
+                let constant_operands = node.constant_operands.clone();
+                let derivatives_of_value_wrt_parent_values = node_type.compute_derivatives_of_value_wrt_parent_values(&parent_nodes, &constant_operands, computation_graph, add_to_computation_graph);
+                for (i, d) in derivatives_of_value_wrt_parent_values.iter().enumerate() {
+                    let parent_idx = parent_nodes[i];
+                    let parent_deriv = derivs[parent_idx as usize];
+                    derivs[node_idx] += parent_deriv * *d;
                 }
             }
-        }
 
-        for (dependency_node_idx, b) in already_in_dependencies.iter().enumerate().rev() {
-            if *b {
-                let node = self.tape.nodes.borrow()[dependency_node_idx].clone();
-                let is_deferred = node.derivatives_mode.is_deferred();
-                if is_deferred {
-                    match &node.derivatives_mode {
-                        DerivativesMode::Deferred(f) => {
-                            let res = f.0.compute(node.parent_node_idxs.clone(), self.tape);
-                            self.tape.nodes.borrow_mut()[dependency_node_idx].derivatives_mode = DerivativesMode::Completed(res);
-                        }
-                        DerivativesMode::Completed(_) => { unreachable!() }
-                    }
-                }
-            }
-        }
-
-        for (dependency_node_idx, b) in already_in_dependencies.iter().enumerate().rev() {
-            if *b {
-                let node = self.tape.nodes.borrow()[dependency_node_idx].clone();
-                let parent_node_idxs = node.parent_node_idxs.clone();
-                let dependency_node = derivs[dependency_node_idx].clone();
-                match &node.derivatives_mode {
-                    DerivativesMode::Completed(derivatives) => {
-                        assert_eq!(derivatives.len(), parent_node_idxs.len());
-                        for (i, parent_node_idx) in parent_node_idxs.iter().enumerate() {
-                            if !(derivatives[i].value() == 0.0 || dependency_node.value() == 0.0) {
-                                derivs[*parent_node_idx] += f64ad::f64ad_var(derivatives[i].clone()) * dependency_node.clone();
-                            }
-                        }
-                    }
-                    _ => { unreachable!() }
-                }
-            }
-        }
-        
-        BackwardsModeGradOutput {
-            derivs
+            return ForwardModeGradOutput { derivs }
         }
     }
-    pub fn forward_mode_grad(&self) -> ForwardModeGradOutput {
-        let n = self.tape.len();
-        let mut derivs = vec![f64ad::f64(0.0); n];
-        derivs[self.node_idx] = f64ad::f64(1.0);
+    fn backwards_mode_grad(&self, add_to_computation_graph: bool) -> BackwardsModeGradOutput {
+        unsafe {
+            let l = (*self.computation_graph.0).nodes.len();
+            let mut derivs = vec![f64ad::f64(0.0); l];
+            if add_to_computation_graph {
+                let computation_graph = &mut (*self.computation_graph.0);
+                let v = computation_graph.spawn_f64ad_var(1.0);
+                derivs[self.node_idx as usize] = v;
+            } else {
+                derivs[self.node_idx as usize] = f64ad::f64(1.0);
+            }
 
-        let mut already_in_successors = vec![false; n];
-        already_in_successors[self.node_idx] = true;
-
-        let mut stack = vec![self.node_idx];
-        while !stack.is_empty() {
-            let curr_idx = stack.pop().unwrap();
-            let curr_node = &self.tape.nodes.borrow()[curr_idx];
-            let mut child_node_idxs = &curr_node.child_node_idxs;
-            for child_node_idx in child_node_idxs {
-                if !already_in_successors[*child_node_idx] {
-                    // successor_node_idxs.push(*child_node_idx);
-                    /*
-                    let binary_search_res = successor_node_idxs.binary_search_by(|x| x.partial_cmp(child_node_idx).unwrap());
-                    match binary_search_res {
-                        Err(idx) => { successor_node_idxs.insert(idx, *child_node_idx) }
-                        _ => { unreachable!() }
-                    }
-                    */
-                    stack.push(*child_node_idx);
-                    already_in_successors[*child_node_idx] = true;
+            let computation_graph = &mut (*self.computation_graph.0);
+            for node_idx in (0..l).rev() {
+                let curr_deriv = derivs[node_idx];
+                let node = &computation_graph.nodes[node_idx].clone();
+                let node_type = node.node_type.clone();
+                let parent_nodes = node.parent_nodes.clone();
+                let constant_operands = node.constant_operands.clone();
+                let derivatives_of_value_wrt_parent_values = node_type.compute_derivatives_of_value_wrt_parent_values(&parent_nodes, &constant_operands, computation_graph, add_to_computation_graph);
+                for (i, d) in derivatives_of_value_wrt_parent_values.iter().enumerate() {
+                    let parent_idx = parent_nodes[i];
+                    derivs[parent_idx as usize] += curr_deriv * *d;
                 }
             }
-        }
 
-        for (successor_node_idx, b) in already_in_successors.iter().enumerate() {
-            if *b {
-                let node = self.tape.nodes.borrow()[successor_node_idx].clone();
-                let is_deferred = node.derivatives_mode.is_deferred();
-                if is_deferred {
-                    match &node.derivatives_mode {
-                        DerivativesMode::Deferred(f) => {
-                            let res = f.0.compute(node.parent_node_idxs.clone(), self.tape);
-                            self.tape.nodes.borrow_mut()[successor_node_idx].derivatives_mode = DerivativesMode::Completed(res);
-                        }
-                        DerivativesMode::Completed(_) => { unreachable!() }
-                    }
-                }
-            }
+            return BackwardsModeGradOutput { derivs }
         }
-
-        for (successor_node_idx, b) in already_in_successors.iter().enumerate() {
-            if *b {
-                let node = self.tape.nodes.borrow()[successor_node_idx].clone();
-                match &node.derivatives_mode {
-                    DerivativesMode::Completed(derivatives) => {
-                        let parent_node_idxs = node.parent_node_idxs;
-                        assert_eq!(parent_node_idxs.len(), derivatives.len());
-                        for (i, parent_node_idx) in parent_node_idxs.iter().enumerate() {
-                            // let parent_node = self.tape.nodes.borrow()[*parent_node_idx].clone();
-                            // if derivs[parent_node.node_idx].is_some() {
-                            let dependency_node = derivs[*parent_node_idx].clone();
-                            derivs[successor_node_idx] += f64ad::f64ad_var(derivatives[i].clone()) * dependency_node;
-                            // }
-                        }
-                    }
-                    _ => { unreachable!() }
-                }
-            }
-        }
-
-        ForwardModeGradOutput { derivs }
     }
 }
 impl Debug for f64ad_var {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str("f64ad: { ")?;
-        f.write_str(&format!("value: {}", self.value()))?;
-        f.write_str(" }")?;
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct BackwardsModeGradOutput {
-    derivs: Vec<f64ad>
-}
-impl BackwardsModeGradOutput {
-    pub fn wrt(&self, input: &f64ad) -> f64ad {
-        match input {
-            f64ad::f64ad_var(input) => {
-                assert_eq!(input.tape.reset_idx.borrow().clone(), input.reset_idx);
-                let idx = input.node_idx;
-                return self.derivs[idx];
-            }
-            f64ad::f64(_) => {
-                panic!("cannot call wrt on f64.")
-            }
+        f.write_str("f64ad_var{ ").expect("error");
+        unsafe {
+            f.write_str(&format!("value: {:?}, ", (*self.computation_graph.0).nodes[self.node_idx as usize].value)).expect("error");
         }
+        f.write_str(&format!("node_idx: {:?}", self.node_idx)).expect("error");
+        f.write_str(" }").expect("error");
+
+        Ok(())
     }
 }
 
@@ -232,1147 +153,1534 @@ pub struct ForwardModeGradOutput {
 }
 impl ForwardModeGradOutput {
     pub fn wrt(&self, output: &f64ad) -> f64ad {
-        match output {
-            f64ad::f64ad_var(output) => {
-                assert_eq!(output.tape.reset_idx.borrow().clone(), output.reset_idx);
-                let idx = output.node_idx;
-                return self.derivs[idx];
-            }
-            f64ad::f64(_) => {
-                panic!("cannot call wrt on f64.")
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct F64ADNode {
-    value: f64,
-    node_idx: usize,
-    num_f64ad_references: usize,
-    ready_for_drop: bool,
-    parent_node_idxs: Vec<usize>,
-    child_node_idxs: Vec<usize>,
-    derivatives_mode: DerivativesMode
-}
-
-#[derive(Debug, Clone)]
-pub enum DerivativesMode {
-    Deferred(DerivativeFunctionBox),
-    Completed(Vec<f64ad_var>)
-}
-impl DerivativesMode {
-    fn is_deferred(&self) -> bool {
-        match self {
-            DerivativesMode::Deferred(_) => { true }
-            _ => { false }
-        }
-    }
-    pub fn new_deferred<F: DerivativeFunction + 'static>(f: F) -> Self {
-        DerivativesMode::Deferred(DerivativeFunctionBox::new(f))
-    }
-}
-
-pub trait DerivativeFunction: Debug + DerivativeFunctionClone {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var>;
-}
-pub trait DerivativeFunctionClone {
-    fn clone_box(&self) -> Box<dyn DerivativeFunction>;
-}
-impl<T> DerivativeFunctionClone for T where T: 'static + DerivativeFunction + Clone {
-    fn clone_box(&self) -> Box<dyn DerivativeFunction> {
-        Box::new(self.clone())
-    }
-}
-
-#[derive(Debug)]
-pub struct DerivativeFunctionBox(Box<dyn DerivativeFunction>);
-impl DerivativeFunctionBox {
-    pub fn new<F: DerivativeFunction + 'static>(f: F) -> Self {
-        Self(Box::new(f))
-    }
-}
-impl Clone for DerivativeFunctionBox {
-    fn clone(&self) -> Self {
-        return Self(self.0.clone_box());
+        return self.derivs[output.node_idx() as usize];
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct ConstantDerivativeFunction;
-impl DerivativeFunction for ConstantDerivativeFunction {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        let mut out_vec = vec![];
-        for _ in &operand_node_idxs {
-            out_vec.push(tape.add_node(0.0, operand_node_idxs.clone(), DerivativesMode::Deferred(DerivativeFunctionBox(Box::new(ConstantDerivativeFunction)))))
-        }
-
-        out_vec
+pub struct BackwardsModeGradOutput {
+    derivs: Vec<f64ad>
+}
+impl BackwardsModeGradOutput {
+    pub fn wrt(&self, input: &f64ad) -> f64ad {
+        return self.derivs[input.node_idx() as usize];
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Tape {
-    nodes: RefCell<Vec<F64ADNode>>,
-    thread_idx: usize,
-    reset_idx: RefCell<usize>
+#[allow(non_camel_case_types)]
+#[derive(Clone, Copy)]
+pub struct f64ad_locked_var {
+    locked_computation_graph_id: usize,
+    node_idx: u32,
+    locked_computation_graph: LockedComputationGraphRawPointer
 }
-impl Tape {
-    fn new(reset_idx: usize, thread_idx: usize) -> Self {
+impl f64ad_locked_var {
+    pub (crate) fn value(&self) -> f64 {
+        return unsafe {
+            (*self.locked_computation_graph.0).computation_graph.nodes[self.node_idx as usize].value
+        }
+    }
+}
+impl Debug for f64ad_locked_var {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("f64ad_locked_var{ ").expect("error");
+        unsafe {
+            f.write_str(&format!("value: {:?}, ", (*self.locked_computation_graph.0).computation_graph.nodes[self.node_idx as usize].value)).expect("error");
+        }
+        f.write_str(&format!("node_idx: {:?}", self.node_idx)).expect("error");
+        f.write_str(" }").expect("error");
+
+        Ok(())
+    }
+}
+
+pub (crate) fn f64ad_locked_var_operation_two_parents(lhs: &f64ad_locked_var, rhs: &f64ad_locked_var, node_type: NodeType) -> f64ad_locked_var {
+    assert_eq!(lhs.locked_computation_graph_id, rhs.locked_computation_graph_id);
+    unsafe {
+        let locked_computation_graph = &mut (*lhs.locked_computation_graph.0);
+        let node_idx = locked_computation_graph.curr_count as usize;
+        let computation_graph = &mut locked_computation_graph.computation_graph;
+        let node = &computation_graph.nodes[node_idx];
+        assert_eq!(node.node_type, node_type);
+        let value = node.node_type.compute_value(&tiny_vec!([u32; 2] => lhs.node_idx, rhs.node_idx), &tiny_vec!([f64; 1]), computation_graph);
+        computation_graph.nodes[node_idx].value = value;
+        locked_computation_graph.curr_count += 1;
+        return f64ad_locked_var {
+            locked_computation_graph_id: lhs.locked_computation_graph_id,
+            node_idx: node_idx as u32,
+            locked_computation_graph: LockedComputationGraphRawPointer(locked_computation_graph as *mut LockedComputationGraph_)
+        };
+    }
+}
+pub (crate) fn f64ad_locked_var_operation_one_parent(v: &f64ad_locked_var, constant_operand: Option<f64>, node_type: NodeType) -> f64ad_locked_var {
+    unsafe {
+        let locked_computation_graph = &mut (*v.locked_computation_graph.0);
+        let node_idx = locked_computation_graph.curr_count as usize;
+        let computation_graph = &mut locked_computation_graph.computation_graph;
+        let node = &computation_graph.nodes[node_idx];
+        assert_eq!(node.node_type, node_type);
+        let value = match constant_operand {
+            None => { node.node_type.compute_value(&tiny_vec!([u32; 2] => v.node_idx), &tiny_vec!([f64; 1]), computation_graph) }
+            Some(constant_operand) => { node.node_type.compute_value(&tiny_vec!([u32; 2] => v.node_idx), &tiny_vec!([f64; 1] => constant_operand), computation_graph) }
+        };
+        computation_graph.nodes[node_idx].value = value;
+        locked_computation_graph.curr_count += 1;
+        return f64ad_locked_var {
+            locked_computation_graph_id: v.locked_computation_graph_id,
+            node_idx: node_idx as u32,
+            locked_computation_graph: LockedComputationGraphRawPointer(locked_computation_graph as *mut LockedComputationGraph_)
+        };
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ComputationGraph {
+    id: usize,
+    name: String,
+    nodes: Vec<F64ADNode>,
+    mode: ComputationGraphMode
+}
+impl ComputationGraph {
+    pub fn new(mode: ComputationGraphMode, name: Option<&str>) -> Self {
+        let mut rng = rand::thread_rng();
+        let id: usize = rng.gen();
         Self {
-            nodes: RefCell::new(vec![]),
-            thread_idx,
-            reset_idx: RefCell::new(reset_idx),
+            id,
+            name: match name {
+                None => { "".to_string() }
+                Some(name) => { name.to_string() }
+            },
+            nodes: Vec::with_capacity(1_000_000),
+            mode
         }
     }
-    pub fn spawn_variable(&'static self, value: f64) -> f64ad {
-        let mut out_var = self.add_variable(value);
-        // out_var.tape.nodes.borrow_mut()[out_var.node_idx].num_f64ad_references += 1;
-        return f64ad::f64ad_var(out_var);
+    pub fn reset(&mut self) {
+        *self = Self::new(self.mode.clone(), Some(&self.name));
     }
-    pub fn spawn_constant(&'static self, value: f64) -> f64ad {
-        return f64ad::f64(value);
-    }
-    pub fn reset(&self) {
-        *self.reset_idx.borrow_mut() += 1;
-        self.nodes.borrow_mut().clear();
-    }
-    pub fn add_variable(&'static self, value: f64) -> f64ad_var {
-        let l = self.len();
-        self.nodes.borrow_mut().push(F64ADNode {
+    pub fn spawn_f64ad_var(&mut self, value: f64) -> f64ad {
+        let node_idx = self.nodes.len();
+
+        let f = f64ad_var {
+            computation_graph_id: self.id,
+            node_idx: node_idx as u32,
+            mode: self.mode.clone(),
+            computation_graph: ComputationGraphRawPointer(self as *mut ComputationGraph)
+        };
+
+        let n = F64ADNode {
+            node_idx: node_idx as u32,
             value,
-            node_idx: l,
-            num_f64ad_references: 1,
-            ready_for_drop: false,
-            parent_node_idxs: vec![],
-            child_node_idxs: vec![],
-            derivatives_mode: DerivativesMode::Completed(vec![])
-        });
+            node_type: NodeType::InputVar,
+            constant_operands: tiny_vec!([f64; 1]),
+            parent_nodes: tiny_vec!([u32; 2]),
+            child_nodes: tiny_vec!([u32; 5])
+        };
+
+        self.nodes.push(n);
+
+        return f64ad::f64ad_var(f);
+    }
+    pub fn lock<T>(&self, name: Option<&str>, template_output: T) -> LockedComputationGraph<T> {
+        LockedComputationGraph::new(name, self.clone(), template_output)
+    }
+    fn add_node(&mut self, node_type: NodeType, parent_nodes: TinyVec<[u32; 2]>, constant_operands: TinyVec<[f64; 1]>) -> f64ad_var {
+        let value = node_type.compute_value(&parent_nodes, &constant_operands, self);
+        let node_idx = self.nodes.len() as u32;
+        for parent_node in &parent_nodes { self.nodes[*parent_node as usize].child_nodes.push(node_idx); }
+        let node = F64ADNode::new(node_idx, value, node_type, constant_operands, parent_nodes);
+        self.nodes.push(node);
+
         f64ad_var {
-            node_idx: l,
-            reset_idx: self.reset_idx.borrow().clone(),
-            tape: &self
+            computation_graph_id: self.id,
+            node_idx,
+            mode: self.mode.clone(),
+            computation_graph: ComputationGraphRawPointer(self as *mut ComputationGraph)
         }
     }
-    fn add_node(&'static self, value: f64, parent_node_idxs: Vec<usize>, derivatives: DerivativesMode) -> f64ad_var {
-        let node_idx = self.nodes.borrow().len();
-        for parent_node_idx in &parent_node_idxs {
-            self.nodes.borrow_mut()[*parent_node_idx].child_node_idxs.push(node_idx);
-        }
-        self.nodes.borrow_mut().push(F64ADNode {
-            value,
-            node_idx,
-            num_f64ad_references: 1,
-            ready_for_drop: false,
-            parent_node_idxs,
-            child_node_idxs: vec![],
-            derivatives_mode: derivatives
-        });
-        return f64ad_var {
-            node_idx,
-            reset_idx: self.reset_idx.borrow().clone(),
-            tape: self
+}
+
+#[derive(Clone, Debug, Copy)]
+pub struct ComputationGraphRawPointer(*mut ComputationGraph);
+unsafe impl Sync for ComputationGraphRawPointer { }
+unsafe impl Send for ComputationGraphRawPointer { }
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ComputationGraphMode {
+    Standard,
+    Lock
+}
+
+#[derive(Clone, Debug)]
+pub (crate) struct LockedComputationGraph_ {
+    id: usize,
+    computation_graph: ComputationGraph,
+    curr_count: u32
+}
+
+#[derive(Clone, Debug, Copy)]
+pub struct LockedComputationGraphRawPointer(*mut LockedComputationGraph_);
+unsafe impl Sync for LockedComputationGraphRawPointer { }
+unsafe impl Send for LockedComputationGraphRawPointer { }
+
+#[derive(Clone, Debug)]
+pub struct LockedComputationGraph<T> {
+    name: String,
+    locked_computation_graph: LockedComputationGraph_,
+    template_output: T
+}
+impl<T> LockedComputationGraph<T> {
+    fn new(name: Option<&str>, computation_graph: ComputationGraph, template_output: T) -> Self {
+        assert_eq!(computation_graph.mode, ComputationGraphMode::Lock, "Computation graph mode must be Lock in order to create a LockedComputationGraph.");
+
+        let mut rng = rand::thread_rng();
+        let id: usize = rng.gen();
+
+        let locked_computation_graph = LockedComputationGraph_ {
+            id,
+            computation_graph,
+            curr_count: 0
         };
-    }
-    pub fn len(&self) -> usize {
-        self.nodes.borrow().len()
-    }
-}
-impl PartialEq for Tape {
-    fn eq(&self, other: &Self) -> bool {
-        return if self.thread_idx == other.thread_idx && self.reset_idx == other.reset_idx { true } else { false }
-    }
-}
 
-static mut _GLOBAL_TAPE: OnceCell<Tape> = OnceCell::new();
-pub struct GlobalTape;
-impl GlobalTape {
-    pub fn get() -> &'static Tape {
-        return unsafe { _GLOBAL_TAPE.get_or_init(|| Tape::new(0, 0)) } ; }
-    pub fn reset() {
-        unsafe {
-            let tape = _GLOBAL_TAPE.take().unwrap();
-            let reset_idx = tape.reset_idx.borrow().clone();
-            _GLOBAL_TAPE.set(Tape::new(reset_idx+1, 0)).unwrap();
+        Self {
+            name: match name {
+                None => { "".to_string() }
+                Some(n) => { n.to_string() }
+            },
+            locked_computation_graph,
+            template_output
         }
     }
-}
-
-static mut _GLOBAL_TAPE_PARALLEL: OnceCell<Vec<Tape>> = OnceCell::new();
-pub struct GlobalTapeParallel;
-impl GlobalTapeParallel {
-    pub fn get(thread_idx: usize) -> &'static Tape {
-        let vec = unsafe {
-            _GLOBAL_TAPE_PARALLEL.get_or_init(|| {
-                let n = num_cpus::get();
-                let mut v = vec![];
-
-                for thread_idx in 0..n { v.push(Tape::new(0, thread_idx)); }
-
-                v
+    pub fn set_value(&mut self, node_idx: usize, value: f64) {
+        let node = &mut self.locked_computation_graph.computation_graph.nodes[node_idx];
+        assert_eq!(node.parent_nodes.len(), 0, "cannot set value of a non-initial node.");
+        node.value = value;
+    }
+    pub fn get_value(&self, idx: usize) -> f64 {
+        return self.locked_computation_graph.computation_graph.nodes[idx].value
+    }
+    pub fn spawn_locked_var(&mut self, value: f64) -> f64ad {
+        let node_idx = self.locked_computation_graph.curr_count;
+        self.set_value(node_idx as usize, value);
+        let f = f64ad_locked_var {
+            locked_computation_graph_id: self.locked_computation_graph.id,
+            node_idx: node_idx as u32,
+            locked_computation_graph: LockedComputationGraphRawPointer(&mut self.locked_computation_graph as *mut LockedComputationGraph_),
+        };
+        self.locked_computation_graph.curr_count += 1;
+        return f64ad::f64ad_locked_var(f);
+    }
+    pub fn template_output(&self) -> &T {
+        &self.template_output
+    }
+    pub fn push_forward_compute(&mut self) {
+        let l = self.locked_computation_graph.computation_graph.nodes.len();
+        for idx in 0..l {
+            let node = &self.locked_computation_graph.computation_graph.nodes[idx];
+            match node.node_type {
+                NodeType::None => {  }
+                NodeType::InputVar => {  }
+                _ => {
+                    let value = node.node_type.compute_value(&node.parent_nodes, &node.constant_operands, &self.locked_computation_graph.computation_graph);
+                    self.locked_computation_graph.computation_graph.nodes[idx].value = value;
+                }
             }
-            )
+        }
+    }
+    pub fn name(&self) -> &String {
+        &self.name
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct F64ADNode {
+    node_idx: u32,
+    value: f64,
+    node_type: NodeType,
+    constant_operands: TinyVec<[f64; 1]>,
+    parent_nodes: TinyVec<[u32; 2]>,
+    child_nodes: TinyVec<[u32; 5]>
+}
+impl F64ADNode {
+    pub fn new(node_idx: u32, value: f64, node_type: NodeType, constant_operands: TinyVec<[f64; 1]>, parent_nodes: TinyVec<[u32; 2]>) -> Self {
+        Self {
+            node_idx,
+            value,
+            node_type,
+            constant_operands,
+            parent_nodes,
+            child_nodes: tiny_vec!([u32; 5])
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NodeType {
+    None,
+    InputVar,
+    AdditionOneParent,
+    AdditionTwoParents,
+    MultiplicationOneParent,
+    MultiplicationTwoParents,
+    SubtractionOneParentLeft,
+    SubtractionOneParentRight,
+    SubtractionTwoParents,
+    DivisionOneParentDenominator,
+    DivisionOneParentNumerator,
+    DivisionTwoParents,
+    Neg,
+    Abs,
+    Signum,
+    MaxOneParent,
+    MaxTwoParents,
+    MinOneParent,
+    MinTwoParents,
+    Atan2OneParentLeft,
+    Atan2OneParentRight,
+    Atan2TwoParents,
+    Floor,
+    Ceil,
+    Round,
+    Trunc,
+    Fract,
+    Sin,
+    Cos,
+    Tan,
+    Asin,
+    Acos,
+    Atan,
+    Sinh,
+    Cosh,
+    Tanh,
+    Asinh,
+    Acosh,
+    Atanh,
+    LogOneParentArgument,
+    LogOneParentBase,
+    LogTwoParents,
+    Sqrt,
+    Exp,
+    PowOneParentArgument,
+    PowOneParentExponent,
+    PowTwoParents
+}
+impl NodeType {
+    pub fn compute_value(&self, parent_nodes: &TinyVec<[u32; 2]>, constant_operands: &TinyVec<[f64; 1]>, computation_graph: &ComputationGraph) -> f64 {
+        match self {
+            NodeType::None => { panic!("Cannot compute value on node type None.") }
+            NodeType::InputVar => { panic!("Cannot compute value on node type InputVar.") }
+            NodeType::AdditionOneParent => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value + constant_operands[0];
+            }
+            NodeType::AdditionTwoParents => {
+                let parent_value_0 = computation_graph.nodes[parent_nodes[0] as usize].value;
+                let parent_value_1 = computation_graph.nodes[parent_nodes[1] as usize].value;
+                return parent_value_0 + parent_value_1;
+            }
+            NodeType::MultiplicationOneParent => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value * constant_operands[0];
+            }
+            NodeType::MultiplicationTwoParents => {
+                let parent_value_0 = computation_graph.nodes[parent_nodes[0] as usize].value;
+                let parent_value_1 = computation_graph.nodes[parent_nodes[1] as usize].value;
+                return parent_value_0 * parent_value_1;
+            }
+            NodeType::SubtractionOneParentLeft => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value - constant_operands[0];
+            }
+            NodeType::SubtractionOneParentRight => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return constant_operands[0] - parent_value;
+            }
+            NodeType::SubtractionTwoParents => {
+                let parent_value_0 = computation_graph.nodes[parent_nodes[0] as usize].value;
+                let parent_value_1 = computation_graph.nodes[parent_nodes[1] as usize].value;
+                return parent_value_0 - parent_value_1;
+            }
+            NodeType::DivisionOneParentDenominator => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return constant_operands[0] / parent_value;
+            }
+            NodeType::DivisionOneParentNumerator => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value / constant_operands[0];
+            }
+            NodeType::DivisionTwoParents => {
+                let parent_value_0 = computation_graph.nodes[parent_nodes[0] as usize].value;
+                let parent_value_1 = computation_graph.nodes[parent_nodes[1] as usize].value;
+                return parent_value_0 / parent_value_1;
+            }
+            NodeType::Neg => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return -parent_value;
+            }
+            NodeType::Abs => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.abs();
+            }
+            NodeType::Signum => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.signum();
+            }
+            NodeType::MaxOneParent => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.max(constant_operands[0]);
+            }
+            NodeType::MaxTwoParents => {
+                let parent_value_0 = computation_graph.nodes[parent_nodes[0] as usize].value;
+                let parent_value_1 = computation_graph.nodes[parent_nodes[1] as usize].value;
+                return parent_value_0.max(parent_value_1);
+            }
+            NodeType::MinOneParent => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.min(constant_operands[0]);
+            }
+            NodeType::MinTwoParents => {
+                let parent_value_0 = computation_graph.nodes[parent_nodes[0] as usize].value;
+                let parent_value_1 = computation_graph.nodes[parent_nodes[1] as usize].value;
+                return parent_value_0.min(parent_value_1);
+            }
+            NodeType::Atan2OneParentLeft => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.atan2(constant_operands[0]);
+            }
+            NodeType::Atan2OneParentRight => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return constant_operands[0].atan2(parent_value);
+            }
+            NodeType::Atan2TwoParents => {
+                let parent_value_0 = computation_graph.nodes[parent_nodes[0] as usize].value;
+                let parent_value_1 = computation_graph.nodes[parent_nodes[1] as usize].value;
+                return parent_value_0.atan2(parent_value_1);
+            }
+            NodeType::Floor => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.floor();
+            }
+            NodeType::Ceil => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.ceil();
+            }
+            NodeType::Round => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.round();
+            }
+            NodeType::Trunc => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.trunc();
+            }
+            NodeType::Fract => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.fract();
+            }
+            NodeType::Sin => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.sin();
+            }
+            NodeType::Cos => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.cos();
+            }
+            NodeType::Tan => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.tan();
+            }
+            NodeType::Asin => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.asin();
+            }
+            NodeType::Acos => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.acos();
+            }
+            NodeType::Atan => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.atan();
+            }
+            NodeType::Sinh => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.sinh();
+            }
+            NodeType::Cosh => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.cosh();
+            }
+            NodeType::Tanh => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.tanh();
+            }
+            NodeType::Asinh => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.asinh();
+            }
+            NodeType::Acosh => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.acosh();
+            }
+            NodeType::Atanh => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.atanh();
+            }
+            NodeType::LogOneParentArgument => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.log(constant_operands[0]);
+            }
+            NodeType::LogOneParentBase => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return constant_operands[0].log(parent_value);
+            }
+            NodeType::LogTwoParents => {
+                let parent_value_0 = computation_graph.nodes[parent_nodes[0] as usize].value;
+                let parent_value_1 = computation_graph.nodes[parent_nodes[1] as usize].value;
+                return parent_value_0.log(parent_value_1);
+            }
+            NodeType::Sqrt => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.sqrt();
+            }
+            NodeType::Exp => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.exp();
+            }
+            NodeType::PowOneParentArgument => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return parent_value.powf(constant_operands[0]);
+            }
+            NodeType::PowOneParentExponent => {
+                let parent_value = computation_graph.nodes[parent_nodes[0] as usize].value;
+                return constant_operands[0].powf(parent_value);
+            }
+            NodeType::PowTwoParents => {
+                let parent_value_0 = computation_graph.nodes[parent_nodes[0] as usize].value;
+                let parent_value_1 = computation_graph.nodes[parent_nodes[1] as usize].value;
+                return parent_value_0.powf(parent_value_1);
+            }
+        }
+    }
+    pub fn compute_derivatives_of_value_wrt_parent_values(&self, parent_nodes: &TinyVec<[u32; 2]>, constant_operands: &TinyVec<[f64; 1]>, computation_graph: &mut ComputationGraph, add_to_computation_graph: bool) -> TinyVec<[f64ad; 2]> {
+        match self {
+            NodeType::None => { panic!("Cannot compute derivatives on node type None.") }
+            NodeType::InputVar => { return tiny_vec!([f64ad; 2]) }
+            NodeType::AdditionOneParent => { return tiny_vec!([f64ad; 2] => f64ad::f64(1.0)); }
+            NodeType::AdditionTwoParents => { return tiny_vec!([f64ad; 2] => f64ad::f64(1.0), f64ad::f64(1.0)); }
+            NodeType::MultiplicationOneParent => { return tiny_vec!([f64ad; 2] => f64ad::f64(constant_operands[0])); }
+            NodeType::MultiplicationTwoParents => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let parent_node_1 = &computation_graph.nodes[parent_nodes[1] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let node_idx_1 = parent_node_1.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_1, mode, computation_graph as *mut ComputationGraph));
+                    let f1 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    tiny_vec!([f64ad; 2] => f0, f1)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let parent_node_1 = &computation_graph.nodes[parent_nodes[1] as usize];
+                    tiny_vec!([f64ad; 2] => f64ad::f64(parent_node_1.value), f64ad::f64(parent_node_0.value))
+                }
+            }
+            NodeType::SubtractionOneParentLeft => { return tiny_vec!([f64ad; 2] => f64ad::f64(1.0)); }
+            NodeType::SubtractionOneParentRight => { return tiny_vec!([f64ad; 2] => f64ad::f64(-1.0)); }
+            NodeType::SubtractionTwoParents => { return tiny_vec!([f64ad; 2] => f64ad::f64(1.0), f64ad::f64(-1.0)); }
+            NodeType::DivisionOneParentDenominator => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = -(constant_operands[0] / (f0 * f0));
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(-(constant_operands[0] / (v * v))))
+                }
+            }
+            NodeType::DivisionOneParentNumerator => {
+                return tiny_vec!([f64ad; 2] => f64ad::f64(1.0/constant_operands[0]));
+            }
+            NodeType::DivisionTwoParents => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let parent_node_1 = &computation_graph.nodes[parent_nodes[1] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let node_idx_1 = parent_node_1.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let f1 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_1, mode, computation_graph as *mut ComputationGraph));
+                    tiny_vec!([f64ad; 2] => 1.0/f1, -f0/(f1*f1))
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let parent_node_1 = &computation_graph.nodes[parent_nodes[1] as usize];
+                    tiny_vec!([f64ad; 2] => f64ad::f64(1.0/parent_node_1.value), f64ad::f64(-parent_node_0.value/(parent_node_1.value * parent_node_1.value)))
+                }
+            }
+            NodeType::Neg => { return tiny_vec!([f64ad; 2] => f64ad::f64(-1.0)); }
+            NodeType::Abs => {
+                let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                let v = parent_node_0.value;
+                if v >= 0.0 {
+                    tiny_vec!([f64ad; 2] => f64ad::f64(1.0))
+                } else {
+                    tiny_vec!([f64ad; 2] => f64ad::f64(-1.0))
+                }
+            }
+            NodeType::Signum => {
+                return tiny_vec!([f64ad; 2] => f64ad::f64(0.0));
+            }
+            NodeType::MaxOneParent => {
+                let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                let v = parent_node_0.value;
+                return if v >= constant_operands[0] { tiny_vec!([f64ad; 2] => f64ad::f64(1.0)) }
+                else { tiny_vec!([f64ad; 2] => f64ad::f64(0.0)) }
+            }
+            NodeType::MaxTwoParents => {
+                let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                let parent_node_1 = &computation_graph.nodes[parent_nodes[1] as usize];
+                let v0 = parent_node_0.value;
+                let v1 = parent_node_1.value;
+                return if v0 >= v1 { tiny_vec!([f64ad; 2] => f64ad::f64(1.0), f64ad::f64(0.0))  }
+                else { tiny_vec!([f64ad; 2] => f64ad::f64(0.0), f64ad::f64(1.0)) }
+            }
+            NodeType::MinOneParent => {
+                let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                let v = parent_node_0.value;
+                return if v <= constant_operands[0] { tiny_vec!([f64ad; 2] => f64ad::f64(1.0)) }
+                else { tiny_vec!([f64ad; 2] => f64ad::f64(0.0)) }
+            }
+            NodeType::MinTwoParents => {
+                let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                let parent_node_1 = &computation_graph.nodes[parent_nodes[1] as usize];
+                let v0 = parent_node_0.value;
+                let v1 = parent_node_1.value;
+                return if v0 <= v1 { tiny_vec!([f64ad; 2] => f64ad::f64(1.0), f64ad::f64(0.0))  }
+                else { tiny_vec!([f64ad; 2] => f64ad::f64(0.0), f64ad::f64(1.0)) }
+            }
+            NodeType::Atan2OneParentLeft => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = constant_operands[0]/ (constant_operands[0].powi(2) + (f0 * f0));
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(constant_operands[0]/ (constant_operands[0].powi(2) + v.powi(2))))
+                }
+            }
+            NodeType::Atan2OneParentRight => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = -constant_operands[0]/ (constant_operands[0].powi(2) + (f0 * f0));
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(-constant_operands[0]/ (constant_operands[0].powi(2) + v.powi(2))))
+                }
+            }
+            NodeType::Atan2TwoParents => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let parent_node_1 = &computation_graph.nodes[parent_nodes[1] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let node_idx_1 = parent_node_1.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let f1 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_1, mode, computation_graph as *mut ComputationGraph));
+                    tiny_vec!([f64ad; 2] => f1/(f0*f0 + f1*f1), -f0/(f0*f0 + f1*f1))
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let parent_node_1 = &computation_graph.nodes[parent_nodes[1] as usize];
+                    let v0 = parent_node_0.value;
+                    let v1 = parent_node_1.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(-v0/(v0*v0 + v1*v1)))
+                }
+            }
+            NodeType::Floor => { return tiny_vec!([f64ad; 2] => f64ad::f64(0.0)); }
+            NodeType::Ceil => { return tiny_vec!([f64ad; 2] => f64ad::f64(0.0)); }
+            NodeType::Round => { return tiny_vec!([f64ad; 2] => f64ad::f64(0.0)); }
+            NodeType::Trunc => { return tiny_vec!([f64ad; 2] => f64ad::f64(0.0)); }
+            NodeType::Fract => { return tiny_vec!([f64ad; 2] => f64ad::f64(0.0)); }
+            NodeType::Sin => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = f0.cos();
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(v.cos()))
+                }
+            }
+            NodeType::Cos => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = -f0.sin();
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(-v.sin()))
+                }
+            }
+            NodeType::Tan => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let c = f0.cos();
+                    let ret = 1.0/(c*c);
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    let c = v.cos();
+                    tiny_vec!([f64ad; 2] => f64ad::f64(1.0/(c*c)))
+                }
+            }
+            NodeType::Asin => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = 1.0/(1.0 - f0*f0).sqrt();
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(1.0/(1.0 - v*v).sqrt()))
+                }
+            }
+            NodeType::Acos => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = -1.0/(1.0 - f0*f0).sqrt();
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(-1.0/(1.0 - v*v).sqrt()))
+                }
+            }
+            NodeType::Atan => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = 1.0/(f0*f0 + 1.0);
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(1.0/(v*v + 1.0)))
+                }
+            }
+            NodeType::Sinh => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = f0.cosh();
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(v.cosh()))
+                }
+            }
+            NodeType::Cosh => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = f0.sinh();
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(v.sinh()))
+                }
+            }
+            NodeType::Tanh => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let c = f0.cosh();
+                    let ret = 1.0/(c*c);
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(1.0/v.cosh().powi(2)))
+                }
+            }
+            NodeType::Asinh => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = 1.0 / (f0*f0 + 1.0).sqrt();
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(1.0 / (v*v + 1.0).sqrt()))
+                }
+            }
+            NodeType::Acosh => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = 1.0 / ((f0 - 1.0).sqrt()*(f0 + 1.0).sqrt());
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(1.0 / ((v - 1.0).sqrt()*(v + 1.0).sqrt())))
+                }
+            }
+            NodeType::Atanh => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = 1.0 / (1.0 - f0*f0);
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(1.0 / (1.0 - v*v)))
+                }
+            }
+            NodeType::LogOneParentArgument => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = 1.0 / (f0*constant_operands[0].ln());
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(1.0 / (v*constant_operands[0].ln())))
+                }
+            }
+            NodeType::LogOneParentBase => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ly = constant_operands[0].ln();
+                    let lx = f0.ln();
+                    println!(" >> {:?}", lx);
+                    let ret = -ly / (f0*(lx*lx));
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    let ly = constant_operands[0].ln();
+                    let lx = v.ln();
+                    let ret = -ly / (v*(lx*lx));
+                    tiny_vec!([f64ad; 2] => f64ad::f64(ret))
+                }
+            }
+            NodeType::LogTwoParents => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let parent_node_1 = &computation_graph.nodes[parent_nodes[1] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let node_idx_1 = parent_node_1.node_idx;
+                    let argument = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let base = f64ad::f64ad_var(f64ad_var::new(id, node_idx_1, mode, computation_graph as *mut ComputationGraph));
+                    let ret0 = 1.0 / (argument * base.ln());
+                    let lb = base.ln();
+                    let ret1 = -argument.ln() / (base * (lb * lb));
+                    tiny_vec!([f64ad; 2] => ret0, ret1)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let parent_node_1 = &computation_graph.nodes[parent_nodes[1] as usize];
+                    let argument = parent_node_0.value;
+                    let base = parent_node_1.value;
+                    let ret0 = 1.0 / (argument * base.ln());
+                    let lb = base.ln();
+                    let ret1 = -argument.ln() / (base * (lb * lb));
+                    tiny_vec!([f64ad; 2] => f64ad::f64(ret0), f64ad::f64(ret1))
+                }
+            }
+            NodeType::Sqrt => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = 1.0/(2.0*f0.sqrt());
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(1.0/(2.0*v.sqrt())))
+                }
+            }
+            NodeType::Exp => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = f0.exp();
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(v.exp()))
+                }
+            }
+            NodeType::PowOneParentArgument => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = constant_operands[0] * f0.powf(f64ad::f64(constant_operands[0] - 1.0));
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    tiny_vec!([f64ad; 2] => f64ad::f64(constant_operands[0] * v.powf(constant_operands[0] - 1.0)))
+                }
+            }
+            NodeType::PowOneParentExponent => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let c = constant_operands[0];
+                    let ret = f64ad::f64(c).powf(f0) * c.ln();
+                    tiny_vec!([f64ad; 2] => ret)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
+                    let c = constant_operands[0];
+                    tiny_vec!([f64ad; 2] => f64ad::f64(c.powf(v) * c.ln()))
+                }
+            }
+            NodeType::PowTwoParents => {
+                return if add_to_computation_graph {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let parent_node_1 = &computation_graph.nodes[parent_nodes[1] as usize];
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let node_idx_1 = parent_node_1.node_idx;
+                    let argument = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let exponent = f64ad::f64ad_var(f64ad_var::new(id, node_idx_1, mode, computation_graph as *mut ComputationGraph));
+                    let ret0 = exponent * argument.powf(exponent - 1.0);
+                    let ret1 = argument.powf(exponent) * argument.ln();
+                    tiny_vec!([f64ad; 2] => ret0, ret1)
+                } else {
+                    let parent_node_0 = &computation_graph.nodes[parent_nodes[0] as usize];
+                    let parent_node_1 = &computation_graph.nodes[parent_nodes[1] as usize];
+                    let argument = parent_node_0.value;
+                    let exponent = parent_node_1.value;
+                    let ret0 = exponent * argument.powf(exponent - 1.0);
+                    let ret1 = argument.powf(exponent) * argument.ln();
+                    tiny_vec!([f64ad; 2] => f64ad::f64(ret0), f64ad::f64(ret1))
+                }
+            }
+        }
+    }
+}
+
+// Addition ////////////////////////////////////////////////////////////////////////////////////////
+
+impl Add for f64ad_var {
+    type Output = f64ad_var;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        assert_eq!(self.computation_graph_id, rhs.computation_graph_id);
+        let res = unsafe {
+            (*self.computation_graph.0).add_node(NodeType::AdditionTwoParents, tiny_vec!([u32; 2] => self.node_idx, rhs.node_idx), tiny_vec!([f64; 1]))
         };
-
-        return vec.get(thread_idx).unwrap();
-    }
-    pub fn reset_all_threads() {
-        unsafe {
-            let tapes = _GLOBAL_TAPE_PARALLEL.take().unwrap();
-            let reset_idx = tapes[0].reset_idx.borrow().clone();
-
-            let n = num_cpus::get();
-            let mut v = vec![];
-
-            for thread_idx in 0..n { v.push(Tape::new(reset_idx+1, thread_idx)); }
-
-            _GLOBAL_TAPE_PARALLEL.set(v).expect("error"); }
+        return res;
     }
 }
-
-// ADDITION //
-
-impl Add<f64ad_var> for f64ad_var {
-    type Output = f64ad_var;
-
-    fn add(self, rhs: f64ad_var) -> Self::Output {
-        assert_eq!(self.tape, rhs.tape);
-
-        let tape = self.tape;
-        return tape.add_node(self.value() + rhs.value(), vec![self.node_idx, rhs.node_idx], DerivativesMode::new_deferred(Add2ParentsDerivative));
-    }
-}
-#[derive(Debug, Clone)]
-pub struct Add2ParentsDerivative;
-impl DerivativeFunction for Add2ParentsDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 2);
-
-        let out1 = tape.add_node(1.0, operand_node_idxs.clone(), DerivativesMode::new_deferred(ConstantDerivativeFunction));
-        let out2 = tape.add_node(1.0, operand_node_idxs.clone(), DerivativesMode::new_deferred(ConstantDerivativeFunction));
-
-        let mut out = vec![
-            out1, out2
-        ];
-
-        out
-    }
-}
-
-impl Add<f64ad_var> for f64 {
-    type Output = f64ad_var;
-
-    fn add(self, rhs: f64ad_var) -> Self::Output {
-        let tape = rhs.tape;
-        tape.add_node(rhs.value() + self, vec![rhs.node_idx], DerivativesMode::new_deferred(Add1ParentDerivative))
-    }
-}
-#[derive(Debug, Clone)]
-pub struct Add1ParentDerivative;
-impl DerivativeFunction for Add1ParentDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let out = tape.add_node(1.0, operand_node_idxs.clone(), DerivativesMode::new_deferred(ConstantDerivativeFunction));
-
-        vec![out]
-    }
-}
-
 impl Add<f64> for f64ad_var {
     type Output = f64ad_var;
 
     fn add(self, rhs: f64) -> Self::Output {
+        let res = unsafe {
+            (*self.computation_graph.0).add_node(NodeType::AdditionOneParent, tiny_vec!([u32; 2] => self.node_idx), tiny_vec!([f64; 1] => rhs))
+        };
+        return res;
+    }
+}
+impl Add<f64ad_var> for f64 {
+    type Output = f64ad_var;
+
+    fn add(self, rhs: f64ad_var) -> Self::Output {
         return rhs + self;
     }
 }
-
-impl AddAssign<f64ad_var> for f64ad_var {
-    fn add_assign(&mut self, rhs: f64ad_var) {
-        *self = self.clone() + rhs;
+impl AddAssign for f64ad_var {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
     }
 }
+impl Add for f64ad_locked_var {
+    type Output = f64ad_locked_var;
 
-impl AddAssign<f64> for f64ad_var {
-    fn add_assign(&mut self, rhs: f64) {
-        *self = self.clone() + rhs;
+    fn add(self, rhs: Self) -> Self::Output {
+        f64ad_locked_var_operation_two_parents(&self, &rhs, NodeType::AdditionTwoParents)
     }
 }
+impl Add<f64> for f64ad_locked_var {
+    type Output = f64ad_locked_var;
 
-impl Sum<f64ad_var> for f64ad_var {
-    fn sum<I: Iterator<Item=f64ad_var>>(iter: I) -> Self {
-         iter.reduce(|a, b| a + b).unwrap()
+    fn add(self, rhs: f64) -> Self::Output {
+        f64ad_locked_var_operation_one_parent(&self, Some(rhs), NodeType::AdditionOneParent)
     }
 }
+impl Add<f64ad_locked_var> for f64 {
+    type Output = f64ad_locked_var;
 
-impl Add<f64ad> for f64ad {
+    fn add(self, rhs: f64ad_locked_var) -> Self::Output {
+        return rhs + self;
+    }
+}
+impl AddAssign for f64ad_locked_var {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
+}
+impl Add for f64ad {
+    type Output = f64ad;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        match (&self, &rhs) {
+            (f64ad::f64ad_var(v1), f64ad::f64ad_var(v2)) => { f64ad::f64ad_var(*v1 + *v2) }
+            (f64ad::f64ad_locked_var(v1), f64ad::f64ad_locked_var(v2)) => { f64ad::f64ad_locked_var(*v1 + *v2) }
+            (f64ad::f64(v1), f64ad::f64(v2)) => { f64ad::f64(*v1 + *v2) }
+            (f64ad::f64ad_var(_), f64ad::f64ad_locked_var(_)) => { panic!("unsupported.") }
+            (f64ad::f64ad_locked_var(_), f64ad::f64ad_var(_)) => { panic!("unsupported.") }
+            (f64ad::f64ad_var(v1), f64ad::f64(v2)) => { f64ad::f64ad_var(*v1 + *v2) }
+            (f64ad::f64(v1), f64ad::f64ad_var(v2)) => { f64ad::f64ad_var(*v1 + *v2) }
+            (f64ad::f64ad_locked_var(v1), f64ad::f64(v2)) => { f64ad::f64ad_locked_var(*v1 + *v2) }
+            (f64ad::f64(v1), f64ad::f64ad_locked_var(v2)) => { f64ad::f64ad_locked_var(*v1 + *v2) }
+        }
+    }
+}
+impl Add<f64> for f64ad {
+    type Output = f64ad;
+
+    fn add(self, rhs: f64) -> Self::Output {
+        return self + f64ad::f64(rhs);
+    }
+}
+impl Add<f64ad> for f64 {
     type Output = f64ad;
 
     fn add(self, rhs: f64ad) -> Self::Output {
-        return match (&self, &rhs) {
-            (f64ad::f64ad_var(f1), f64ad::f64ad_var(f2)) => {
-                f64ad::f64ad_var(f1.clone() + f2.clone())
-            }
-            (f64ad::f64ad_var(f1), f64ad::f64(f2)) => {
-                f64ad::f64ad_var(f1.clone() + *f2)
-            }
-            (f64ad::f64(f1), f64ad::f64ad_var(f2)) => {
-                f64ad::f64ad_var(*f1 + f2.clone())
-            }
-            (f64ad::f64(f1), f64ad::f64(f2)) => {
-                f64ad::f64(*f1 + *f2)
-            }
-        }
+        return rhs + f64ad::f64(self);
     }
 }
-impl AddAssign<f64ad> for f64ad {
-    fn add_assign(&mut self, rhs: f64ad) {
-        *self = self.clone() + rhs;
+impl AddAssign for f64ad {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
     }
 }
 
-impl Sum<f64ad> for f64ad {
-    fn sum<I: Iterator<Item=f64ad>>(iter: I) -> Self {
-         iter.reduce(|a, b| a + b).unwrap()
-    }
-}
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// SUBTRACTION //
-impl Sub<f64ad_var> for f64ad_var {
+// Multiplication //////////////////////////////////////////////////////////////////////////////////
+
+impl Mul for f64ad_var {
     type Output = f64ad_var;
 
-    fn sub(self, rhs: f64ad_var) -> Self::Output {
-        assert_eq!(self.tape, rhs.tape);
-
-        let tape = self.tape;
-        return tape.add_node(self.value() - rhs.value(), vec![self.node_idx, rhs.node_idx], DerivativesMode::new_deferred(Sub2ParentsDerivative));
+    fn mul(self, rhs: Self) -> Self::Output {
+        assert_eq!(self.computation_graph_id, rhs.computation_graph_id);
+        let res = unsafe {
+            (*self.computation_graph.0).add_node(NodeType::MultiplicationTwoParents, tiny_vec!([u32; 2] => self.node_idx, rhs.node_idx), tiny_vec!([f64; 1]))
+        };
+        return res;
     }
 }
-#[derive(Debug, Clone)]
-pub struct Sub2ParentsDerivative;
-impl DerivativeFunction for Sub2ParentsDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 2);
-
-        let out1 = tape.add_node(1.0, operand_node_idxs.clone(), DerivativesMode::new_deferred(ConstantDerivativeFunction));
-        let out2 = tape.add_node(-1.0, operand_node_idxs.clone(), DerivativesMode::new_deferred(ConstantDerivativeFunction));
-
-        let mut out = vec![
-            out1, out2
-        ];
-
-        out
-    }
-}
-
-impl Sub<f64ad_var> for f64 {
-    type Output = f64ad_var;
-
-    fn sub(self, rhs: f64ad_var) -> Self::Output {
-        let tape = rhs.tape;
-        tape.add_node(self - rhs.value(), vec![rhs.node_idx], DerivativesMode::new_deferred(SubRight1ParentDerivative))
-    }
-}
-#[derive(Debug, Clone)]
-pub struct SubRight1ParentDerivative;
-impl DerivativeFunction for SubRight1ParentDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let out = tape.add_node(-1.0, operand_node_idxs.clone(), DerivativesMode::new_deferred(ConstantDerivativeFunction));
-
-        vec![out]
-    }
-}
-
-impl Sub<f64> for f64ad_var {
-    type Output = f64ad_var;
-
-    fn sub(self, rhs: f64) -> Self::Output {
-        let tape = self.tape;
-        tape.add_node(self.value() - rhs, vec![self.node_idx], DerivativesMode::new_deferred(SubLeft1ParentDerivative))
-    }
-}
-#[derive(Debug, Clone)]
-pub struct SubLeft1ParentDerivative;
-impl DerivativeFunction for SubLeft1ParentDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let out = tape.add_node(1.0, operand_node_idxs.clone(), DerivativesMode::new_deferred(ConstantDerivativeFunction));
-
-        vec![out]
-    }
-}
-
-impl SubAssign<f64ad_var> for f64ad_var {
-    fn sub_assign(&mut self, rhs: f64ad_var) {
-        *self = self.clone() - rhs;
-    }
-}
-
-impl SubAssign<f64> for f64ad_var {
-    fn sub_assign(&mut self, rhs: f64) {
-        *self = self.clone() - rhs;
-    }
-}
-
-impl Sub<f64ad> for f64ad {
-    type Output = f64ad;
-
-    fn sub(self, rhs: f64ad) -> Self::Output {
-        return match (&self, &rhs) {
-            (f64ad::f64ad_var(f1), f64ad::f64ad_var(f2)) => {
-                f64ad::f64ad_var(f1.clone() - f2.clone())
-            }
-            (f64ad::f64ad_var(f1), f64ad::f64(f2)) => {
-                f64ad::f64ad_var(f1.clone() - *f2)
-            }
-            (f64ad::f64(f1), f64ad::f64ad_var(f2)) => {
-                f64ad::f64ad_var(*f1 - f2.clone())
-            }
-            (f64ad::f64(f1), f64ad::f64(f2)) => {
-                f64ad::f64(*f1 - *f2)
-            }
-        }
-    }
-}
-impl SubAssign<f64ad> for f64ad {
-    fn sub_assign(&mut self, rhs: f64ad) {
-        *self = self.clone() - rhs;
-    }
-}
-
-// MULTIPLICATION //
-
-impl Mul<f64ad_var> for f64ad_var {
-    type Output = f64ad_var;
-
-    fn mul(self, rhs: f64ad_var) -> Self::Output {
-        assert_eq!(self.tape, rhs.tape);
-
-        let tape = self.tape;
-        tape.add_node(self.value() * rhs.value(), vec![self.node_idx, rhs.node_idx], DerivativesMode::new_deferred(Mul2ParentsDerivative))
-    }
-}
-#[derive(Debug, Clone)]
-pub struct Mul2ParentsDerivative;
-impl DerivativeFunction for Mul2ParentsDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 2);
-
-        let out1 = f64ad_var::new_from_node_idx(operand_node_idxs[1], tape);
-        let out2 = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        let mut out = vec![
-            out1, out2
-        ];
-
-        out
-    }
-}
-
-impl Mul<f64ad_var> for f64 {
-    type Output = f64ad_var;
-
-    fn mul(self, rhs: f64ad_var) -> Self::Output {
-        let tape = rhs.tape;
-        tape.add_node(rhs.value() * self, vec![rhs.node_idx], DerivativesMode::new_deferred(Mul1ParentDerivative { n: self }))
-    }
-}
-#[derive(Debug, Clone)]
-pub struct Mul1ParentDerivative {
-    n: f64
-}
-impl DerivativeFunction for Mul1ParentDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let out = tape.add_node(self.n, operand_node_idxs.clone(), DerivativesMode::Deferred(DerivativeFunctionBox(Box::new(ConstantDerivativeFunction))));
-
-        vec![out]
-    }
-}
-
 impl Mul<f64> for f64ad_var {
     type Output = f64ad_var;
 
     fn mul(self, rhs: f64) -> Self::Output {
+        let res = unsafe {
+            (*self.computation_graph.0).add_node(NodeType::MultiplicationOneParent, tiny_vec!([u32; 2] => self.node_idx), tiny_vec!([f64; 1] => rhs))
+        };
+        return res;
+    }
+}
+impl Mul<f64ad_var> for f64 {
+    type Output = f64ad_var;
+
+    fn mul(self, rhs: f64ad_var) -> Self::Output {
         return rhs * self;
     }
 }
-
-impl MulAssign<f64ad_var> for f64ad_var {
-    fn mul_assign(&mut self, rhs: f64ad_var) {
-        *self = self.clone() * rhs;
+impl MulAssign for f64ad_var {
+    fn mul_assign(&mut self, rhs: Self) {
+        *self = *self * rhs;
     }
 }
+impl Mul for f64ad_locked_var {
+    type Output = f64ad_locked_var;
 
-impl MulAssign<f64> for f64ad_var {
-    fn mul_assign(&mut self, rhs: f64) {
-        *self = self.clone() * rhs;
+    fn mul(self, rhs: Self) -> Self::Output {
+        f64ad_locked_var_operation_two_parents(&self, &rhs, NodeType::MultiplicationTwoParents)
     }
 }
+impl Mul<f64> for f64ad_locked_var {
+    type Output = f64ad_locked_var;
 
-impl Mul<f64ad> for f64ad {
+    fn mul(self, rhs: f64) -> Self::Output {
+        f64ad_locked_var_operation_one_parent(&self, Some(rhs), NodeType::MultiplicationOneParent)
+    }
+}
+impl Mul<f64ad_locked_var> for f64 {
+    type Output = f64ad_locked_var;
+
+    fn mul(self, rhs: f64ad_locked_var) -> Self::Output {
+        return rhs * self;
+    }
+}
+impl MulAssign for f64ad_locked_var {
+    fn mul_assign(&mut self, rhs: Self) {
+        *self = *self * rhs;
+    }
+}
+impl Mul for f64ad {
+    type Output = f64ad;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        match (&self, &rhs) {
+            (f64ad::f64ad_var(v1), f64ad::f64ad_var(v2)) => { f64ad::f64ad_var(*v1 * *v2) }
+            (f64ad::f64ad_locked_var(v1), f64ad::f64ad_locked_var(v2)) => { f64ad::f64ad_locked_var(*v1 * *v2) }
+            (f64ad::f64(v1), f64ad::f64(v2)) => { f64ad::f64(*v1 * *v2) }
+            (f64ad::f64ad_var(_), f64ad::f64ad_locked_var(_)) => { panic!("unsupported.") }
+            (f64ad::f64ad_locked_var(_), f64ad::f64ad_var(_)) => { panic!("unsupported.") }
+            (f64ad::f64ad_var(v1), f64ad::f64(v2)) => { f64ad::f64ad_var(*v1 * *v2) }
+            (f64ad::f64(v1), f64ad::f64ad_var(v2)) => { f64ad::f64ad_var(*v1 * *v2) }
+            (f64ad::f64ad_locked_var(v1), f64ad::f64(v2)) => { f64ad::f64ad_locked_var(*v1 * *v2) }
+            (f64ad::f64(v1), f64ad::f64ad_locked_var(v2)) => { f64ad::f64ad_locked_var(*v1 * *v2) }
+        }
+    }
+}
+impl Mul<f64> for f64ad {
+    type Output = f64ad;
+
+    fn mul(self, rhs: f64) -> Self::Output {
+        return self * f64ad::f64(rhs);
+    }
+}
+impl Mul<f64ad> for f64 {
     type Output = f64ad;
 
     fn mul(self, rhs: f64ad) -> Self::Output {
-        return match (&self, &rhs) {
-            (f64ad::f64ad_var(f1), f64ad::f64ad_var(f2)) => {
-                f64ad::f64ad_var(f1.clone() * f2.clone())
-            }
-            (f64ad::f64ad_var(f1), f64ad::f64(f2)) => {
-                f64ad::f64ad_var(f1.clone() * *f2)
-            }
-            (f64ad::f64(f1), f64ad::f64ad_var(f2)) => {
-                f64ad::f64ad_var(*f1 * f2.clone())
-            }
-            (f64ad::f64(f1), f64ad::f64(f2)) => {
-                f64ad::f64(*f1 * *f2)
-            }
+        return rhs * self;
+    }
+}
+impl MulAssign for f64ad {
+    fn mul_assign(&mut self, rhs: Self) {
+        *self = *self * rhs;
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Subtraction /////////////////////////////////////////////////////////////////////////////////////
+
+impl Sub for f64ad_var {
+    type Output = f64ad_var;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        assert_eq!(self.computation_graph_id, rhs.computation_graph_id);
+        let res = unsafe {
+            (*self.computation_graph.0).add_node(NodeType::SubtractionTwoParents, tiny_vec!([u32; 2] => self.node_idx, rhs.node_idx), tiny_vec!([f64; 1]))
+        };
+        return res;
+    }
+}
+impl Sub<f64> for f64ad_var {
+    type Output = f64ad_var;
+
+    fn sub(self, rhs: f64) -> Self::Output {
+        let res = unsafe {
+            (*self.computation_graph.0).add_node(NodeType::SubtractionOneParentLeft, tiny_vec!([u32; 2] => self.node_idx), tiny_vec!([f64; 1] => rhs))
+        };
+        return res;
+    }
+}
+impl Sub<f64ad_var> for f64 {
+    type Output = f64ad_var;
+
+    fn sub(self, rhs: f64ad_var) -> Self::Output {
+        let res = unsafe {
+            (*rhs.computation_graph.0).add_node(NodeType::SubtractionOneParentRight, tiny_vec!([u32; 2] => rhs.node_idx), tiny_vec!([f64; 1] => self))
+        };
+        return res;
+    }
+}
+impl SubAssign for f64ad_var {
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
+    }
+}
+impl Sub for f64ad_locked_var {
+    type Output = f64ad_locked_var;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        f64ad_locked_var_operation_two_parents(&self, &rhs, NodeType::SubtractionTwoParents)
+    }
+}
+impl Sub<f64> for f64ad_locked_var {
+    type Output = f64ad_locked_var;
+
+    fn sub(self, rhs: f64) -> Self::Output {
+        f64ad_locked_var_operation_one_parent(&self, Some(rhs), NodeType::SubtractionOneParentLeft)
+    }
+}
+impl Sub<f64ad_locked_var> for f64 {
+    type Output = f64ad_locked_var;
+
+    fn sub(self, rhs: f64ad_locked_var) -> Self::Output {
+        f64ad_locked_var_operation_one_parent(&rhs, Some(self), NodeType::SubtractionOneParentRight)
+    }
+}
+impl SubAssign for f64ad_locked_var {
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self -rhs;
+    }
+}
+impl Sub for f64ad {
+    type Output = f64ad;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        match (&self, &rhs) {
+            (f64ad::f64ad_var(v1), f64ad::f64ad_var(v2)) => { f64ad::f64ad_var(*v1 - *v2) }
+            (f64ad::f64ad_locked_var(v1), f64ad::f64ad_locked_var(v2)) => { f64ad::f64ad_locked_var(*v1 - *v2) }
+            (f64ad::f64(v1), f64ad::f64(v2)) => { f64ad::f64(*v1 - *v2) }
+            (f64ad::f64ad_var(_), f64ad::f64ad_locked_var(_)) => { panic!("unsupported.") }
+            (f64ad::f64ad_locked_var(_), f64ad::f64ad_var(_)) => { panic!("unsupported.") }
+            (f64ad::f64ad_var(v1), f64ad::f64(v2)) => { f64ad::f64ad_var(*v1 - *v2) }
+            (f64ad::f64(v1), f64ad::f64ad_var(v2)) => { f64ad::f64ad_var(*v1 - *v2) }
+            (f64ad::f64ad_locked_var(v1), f64ad::f64(v2)) => { f64ad::f64ad_locked_var(*v1 - *v2) }
+            (f64ad::f64(v1), f64ad::f64ad_locked_var(v2)) => { f64ad::f64ad_locked_var(*v1 - *v2) }
         }
     }
 }
-impl MulAssign<f64ad> for f64ad {
-    fn mul_assign(&mut self, rhs: f64ad) {
-        *self = self.clone() * rhs;
+impl Sub<f64> for f64ad {
+    type Output = f64ad;
+
+    fn sub(self, rhs: f64) -> Self::Output {
+        return self - f64ad::f64(rhs);
+    }
+}
+impl Sub<f64ad> for f64 {
+    type Output = f64ad;
+
+    fn sub(self, rhs: f64ad) -> Self::Output { return f64ad::f64(self) - rhs; }
+}
+impl SubAssign for f64ad {
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
     }
 }
 
-// DIVISION //
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
-impl Div<f64ad_var> for f64ad_var {
+// Division ////////////////////////////////////////////////////////////////////////////////////////
+
+impl Div for f64ad_var {
     type Output = f64ad_var;
 
-    fn div(self, rhs: f64ad_var) -> Self::Output {
-        assert_eq!(self.tape, rhs.tape);
-
-        let tape = self.tape;
-
-        if self.node_idx == rhs.node_idx {
-            return tape.add_node(1.0, vec![self.node_idx, rhs.node_idx], DerivativesMode::new_deferred(ConstantDerivativeFunction));
-        }
-
-        tape.add_node(self.value() / rhs.value(), vec![self.node_idx, rhs.node_idx], DerivativesMode::new_deferred(Div2ParentsDerivative))
+    fn div(self, rhs: Self) -> Self::Output {
+        assert_eq!(self.computation_graph_id, rhs.computation_graph_id);
+        let res = unsafe {
+            (*self.computation_graph.0).add_node(NodeType::DivisionTwoParents, tiny_vec!([u32; 2] => self.node_idx, rhs.node_idx), tiny_vec!([f64; 1]))
+        };
+        return res;
     }
 }
-#[derive(Clone, Debug)]
-pub struct Div2ParentsDerivative;
-impl DerivativeFunction for Div2ParentsDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 2);
-
-        let operand1_f64ad = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-        let operand2_f64ad = f64ad_var::new_from_node_idx(operand_node_idxs[1], tape);
-
-        let out1 = 1.0 / operand2_f64ad.clone();
-        let out2 = -1.0 * (operand1_f64ad / (operand2_f64ad.internal_powf(2.0)));
-
-        return vec![out1, out2];
-    }
-}
-
-impl Div<f64ad_var> for f64 {
-    type Output = f64ad_var;
-
-    fn div(self, rhs: f64ad_var) -> Self::Output {
-        let tape = rhs.tape;
-        tape.add_node(self / rhs.value(), vec![rhs.node_idx], DerivativesMode::new_deferred(DivDenominator1ParentDerivative {numerator: self}))
-    }
-}
-#[derive(Clone, Debug)]
-pub struct DivDenominator1ParentDerivative {
-    numerator: f64
-}
-impl DerivativeFunction for DivDenominator1ParentDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        let out = -self.numerator / (operand_f64ad.internal_powf(2.0));
-
-        vec![out]
-    }
-}
-
 impl Div<f64> for f64ad_var {
     type Output = f64ad_var;
 
     fn div(self, rhs: f64) -> Self::Output {
-        let tape = self.tape;
-        tape.add_node(self.value() / rhs, vec![self.node_idx], DerivativesMode::new_deferred(DivNumerator1ParentDerivative { denominator: rhs }))
+        let res = unsafe {
+            (*self.computation_graph.0).add_node(NodeType::DivisionOneParentNumerator, tiny_vec!([u32; 2] => self.node_idx), tiny_vec!([f64; 1] => rhs))
+        };
+        return res;
     }
 }
-#[derive(Clone, Debug)]
-pub struct DivNumerator1ParentDerivative {
-    denominator: f64
-}
-impl DerivativeFunction for DivNumerator1ParentDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let out = tape.add_node(1.0 / self.denominator, operand_node_idxs.clone(), DerivativesMode::new_deferred(ConstantDerivativeFunction));
-
-        vec![out]
-    }
-}
-
-// Negation //
-
-impl Neg for f64ad_var {
+impl Div<f64ad_var> for f64 {
     type Output = f64ad_var;
 
-    fn neg(self) -> Self::Output {
-        return -1.0 * self;
+    fn div(self, rhs: f64ad_var) -> Self::Output {
+        let res = unsafe {
+            (*rhs.computation_graph.0).add_node(NodeType::DivisionOneParentDenominator, tiny_vec!([u32; 2] => rhs.node_idx), tiny_vec!([f64; 1] => self))
+        };
+        return res;
     }
 }
-
-// POW //
-
-pub trait Powf<T> {
-    type Output;
-    /// Calculate `powf` for self, where `other` is the power to raise `self` to.
-    fn internal_powf(&self, other: T) -> Self::Output;
-}
-
-impl Powf<f64ad_var> for f64ad_var {
-    type Output = f64ad_var;
-
-    fn internal_powf(&self, other: f64ad_var) -> Self::Output {
-        assert_eq!(self.tape, other.tape);
-        let tape = self.tape;
-
-        todo!()
-        // tape.add_node(self.value().powf(other.value()), vec![self.node_idx, other.node_idx], )
+impl DivAssign for f64ad_var {
+    fn div_assign(&mut self, rhs: Self) {
+        *self = *self / rhs;
     }
 }
+impl Div for f64ad_locked_var {
+    type Output = f64ad_locked_var;
 
-impl Powf<f64> for f64ad_var {
-    type Output = f64ad_var;
-
-    fn internal_powf(&self, other: f64) -> Self::Output {
-        let tape = self.tape;
-        tape.add_node( self.value().powf(other), vec![self.node_idx], DerivativesMode::new_deferred(PowfBase1ParentDerivative {n: other}))
+    fn div(self, rhs: Self) -> Self::Output {
+        f64ad_locked_var_operation_two_parents(&self, &rhs, NodeType::DivisionTwoParents)
     }
 }
-#[derive(Debug, Clone)]
-pub struct PowfBase1ParentDerivative {
-    n: f64
-}
-impl DerivativeFunction for PowfBase1ParentDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
+impl Div<f64> for f64ad_locked_var {
+    type Output = f64ad_locked_var;
 
-        let operand_f64ad = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        if self.n == 0.0 && operand_f64ad.value() == 0.0 {
-            return vec![f64ad_var::new_manual(0.0, operand_node_idxs.clone(), DerivativesMode::new_deferred(ConstantDerivativeFunction), tape)];
-        }
-
-        let out = self.n * operand_f64ad.internal_powf(self.n - 1.0);
-
-        vec![out]
+    fn div(self, rhs: f64) -> Self::Output {
+        f64ad_locked_var_operation_one_parent(&self, Some(rhs), NodeType::DivisionOneParentNumerator)
     }
 }
+impl Div<f64ad_locked_var> for f64 {
+    type Output = f64ad_locked_var;
 
-impl f64ad_var {
-    pub fn internal_powi(&self, n: i32) -> Self {
-        return self.internal_powf(n as f64);
+    fn div(self, rhs: f64ad_locked_var) -> Self::Output {
+        f64ad_locked_var_operation_one_parent(&rhs, Some(self), NodeType::DivisionOneParentDenominator)
     }
 }
-
-// Roots //
-
-impl f64ad_var {
-    pub fn internal_sqrt(&self) -> Self {
-        return self.internal_powf(0.5);
-    }
-    pub fn internal_cbrt(&self) -> Self {
-        return self.internal_powf(1.0/3.0);
+impl DivAssign for f64ad_locked_var {
+    fn div_assign(&mut self, rhs: Self) {
+        *self = *self / rhs;
     }
 }
-
-// Trig functions //
-
-impl f64ad_var {
-    pub fn internal_sin(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().sin(), vec![self.node_idx], DerivativesMode::new_deferred(SinDerivative))
-    }
-    pub fn internal_cos(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().cos(), vec![self.node_idx], DerivativesMode::new_deferred(CosDerivative))
-    }
-    pub fn internal_tan(&self) -> Self {
-        return self.internal_sin() / self.internal_cos();
-    }
-    pub fn internal_asin(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().asin(), vec![self.node_idx], DerivativesMode::new_deferred(ASinDerivative))
-    }
-    pub fn internal_acos(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().acos(), vec![self.node_idx], DerivativesMode::new_deferred(ACosDerivative))
-    }
-    pub fn internal_atan(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().atan(), vec![self.node_idx], DerivativesMode::new_deferred(ATanDerivative))
-    }
-    pub fn internal_sinh(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().sinh(), vec![self.node_idx], DerivativesMode::new_deferred(SinhDerivative))
-    }
-    pub fn internal_cosh(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().cosh(), vec![self.node_idx], DerivativesMode::new_deferred(CoshDerivative))
-    }
-    pub fn internal_tanh(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().tanh(), vec![self.node_idx], DerivativesMode::new_deferred(TanhDerivative))
-    }
-    pub fn internal_asinh(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().asinh(), vec![self.node_idx], DerivativesMode::new_deferred(ASinhDerivative))
-    }
-    pub fn internal_acosh(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().acosh(), vec![self.node_idx], DerivativesMode::new_deferred(ACoshDerivative))
-    }
-    pub fn internal_atanh(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().atanh(), vec![self.node_idx], DerivativesMode::new_deferred(ATanhDerivative))
-    }
-    fn internal_neg_sin(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(-self.value().sin(), vec![self.node_idx], DerivativesMode::new_deferred(NegSinDerivative))
-    }
-    fn internal_neg_cos(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(-self.value().cos(), vec![self.node_idx], DerivativesMode::new_deferred(NegCosDerivative))
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct SinDerivative;
-impl DerivativeFunction for SinDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-        let out = operand_f64ad.internal_cos();
-        return vec![out];
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct CosDerivative;
-impl DerivativeFunction for CosDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-        let out = operand_f64ad.internal_neg_sin();
-
-        return vec![out];
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct NegSinDerivative;
-impl DerivativeFunction for NegSinDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-        let out = operand_f64ad.internal_neg_cos();
-        return vec![out];
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct NegCosDerivative;
-impl DerivativeFunction for NegCosDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-        let out = operand_f64ad.internal_sin();
-
-        return vec![out];
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct TanDerivative;
-impl DerivativeFunction for TanDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        let out = 1.0 / (operand_f64ad_var.internal_cos().internal_powf(2.0));
-
-        return vec![out];
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ASinDerivative;
-impl DerivativeFunction for ASinDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        let out = 1.0 / (1.0 - operand_f64ad_var.internal_powf(2.0)).internal_sqrt();
-
-        return vec![out];
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ACosDerivative;
-impl DerivativeFunction for ACosDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        let out = -1.0 / (1.0 - operand_f64ad_var.internal_powf(2.0)).internal_sqrt();
-
-        return vec![out];
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ATanDerivative;
-impl DerivativeFunction for ATanDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        let out = 1.0 / (1.0 + operand_f64ad_var.internal_powf(2.0));
-
-        return vec![out];
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct SinhDerivative;
-impl DerivativeFunction for SinhDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        let out = operand_f64ad_var.internal_cosh();
-
-        return vec![out];
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct CoshDerivative;
-impl DerivativeFunction for CoshDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        let out = operand_f64ad_var.internal_sinh();
-
-        return vec![out];
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct TanhDerivative;
-impl DerivativeFunction for TanhDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        let out = 1.0 / (operand_f64ad_var.internal_cosh().internal_powf(2.0));
-
-        return vec![out];
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ASinhDerivative;
-impl DerivativeFunction for ASinhDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        let out = 1.0 / (1.0 + operand_f64ad_var.internal_powf(2.0)).internal_sqrt();
-
-        return vec![out];
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ACoshDerivative;
-impl DerivativeFunction for ACoshDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        let out = 1.0 / (operand_f64ad_var.internal_powf(2.0) - 1.0).internal_sqrt();
-
-        return vec![out];
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ATanhDerivative;
-impl DerivativeFunction for ATanhDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        let out = 1.0 / (1.0 - operand_f64ad_var.internal_powf(2.0));
-
-        return vec![out];
-    }
-}
-
-// Recip //
-
-impl f64ad_var {
-    pub fn internal_recip(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().recip(), vec![self.node_idx], DerivativesMode::new_deferred(RecipDerivative))
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct RecipDerivative;
-impl DerivativeFunction for RecipDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        let out = -1.0 / (operand_f64ad_var.internal_powf(2.0));
-
-        return vec![out];
-    }
-}
-
-// Logarithms //
-
-impl f64ad_var {
-    pub fn internal_ln(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().ln(), vec![self.node_idx], DerivativesMode::new_deferred(LnDerivative))
-    }
-    pub fn internal_log(&self, base: f64) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().log(base), vec![self.node_idx], DerivativesMode::new_deferred(LogDerivative { base, base_ln: base.ln() }))
-    }
-    pub fn internal_log_variable_base(&self, base: f64ad_var) -> Self {
-        return self.internal_ln() / base.internal_ln();
-    }
-    pub fn internal_log10(&self) -> Self {
-        return self.internal_log(10.0);
-    }
-    pub fn internal_log2(&self) -> Self {
-        return self.internal_log(2.0);
-    }
-    pub fn internal_ln_1p(&self) -> Self {
-        return (self.clone() + 1.0).internal_ln();
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct LnDerivative;
-impl DerivativeFunction for LnDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        let out = operand_f64ad_var.internal_recip();
-
-        return vec![out];
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct LogDerivative {
-    base: f64,
-    base_ln: f64
-}
-impl DerivativeFunction for LogDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        let out = 1.0 / (operand_f64ad_var * self.base_ln);
-
-        return vec![out];
-    }
-}
-
-// Exponentials //
-
-impl f64ad_var {
-    pub fn internal_exp(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().exp(), vec![self.node_idx], DerivativesMode::new_deferred(ExpDerivative))
-    }
-    pub fn internal_exp2(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().exp2(), vec![self.node_idx], DerivativesMode::new_deferred(Exp2Derivative))
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ExpDerivative;
-impl DerivativeFunction for ExpDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        let out = operand_f64ad_var.internal_exp();
-
-        return vec![out];
-
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Exp2Derivative;
-impl DerivativeFunction for Exp2Derivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        let out = operand_f64ad_var.internal_exp2() * 2_f64.ln();
-
-        return vec![out];
-
-    }
-}
-
-// Abs //
-
-impl f64ad_var {
-    pub fn internal_abs(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().abs(), vec![self.node_idx], DerivativesMode::new_deferred(AbsDerivative))
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct AbsDerivative;
-impl DerivativeFunction for AbsDerivative {
-    fn compute(&self, operand_node_idxs: Vec<usize>, tape: &'static Tape) -> Vec<f64ad_var> {
-        assert_eq!(operand_node_idxs.len(), 1);
-
-        let operand_f64ad_var = f64ad_var::new_from_node_idx(operand_node_idxs[0], tape);
-
-        let val = operand_f64ad_var.value();
-        if val >= 0.0 {
-            return vec![f64ad_var::new_manual(1.0, operand_node_idxs.clone(), DerivativesMode::new_deferred(ConstantDerivativeFunction), tape)];
-        } else {
-            return vec![f64ad_var::new_manual(-1.0, operand_node_idxs.clone(), DerivativesMode::new_deferred(ConstantDerivativeFunction), tape)];
+impl Div for f64ad {
+    type Output = f64ad;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        match (&self, &rhs) {
+            (f64ad::f64ad_var(v1), f64ad::f64ad_var(v2)) => { f64ad::f64ad_var(*v1 / *v2) }
+            (f64ad::f64ad_locked_var(v1), f64ad::f64ad_locked_var(v2)) => { f64ad::f64ad_locked_var(*v1 / *v2) }
+            (f64ad::f64(v1), f64ad::f64(v2)) => { f64ad::f64(*v1 / *v2) }
+            (f64ad::f64ad_var(_), f64ad::f64ad_locked_var(_)) => { panic!("unsupported.") }
+            (f64ad::f64ad_locked_var(_), f64ad::f64ad_var(_)) => { panic!("unsupported.") }
+            (f64ad::f64ad_var(v1), f64ad::f64(v2)) => { f64ad::f64ad_var(*v1 / *v2) }
+            (f64ad::f64(v1), f64ad::f64ad_var(v2)) => { f64ad::f64ad_var(*v1 / *v2) }
+            (f64ad::f64ad_locked_var(v1), f64ad::f64(v2)) => { f64ad::f64ad_locked_var(*v1 / *v2) }
+            (f64ad::f64(v1), f64ad::f64ad_locked_var(v2)) => { f64ad::f64ad_locked_var(*v1 / *v2) }
         }
     }
 }
+impl Div<f64> for f64ad {
+    type Output = f64ad;
 
-// Floor, Ceil, Round, Rem //
+    fn div(self, rhs: f64) -> Self::Output {
+        return self / f64ad::f64(rhs);
+    }
+}
+impl Div<f64ad> for f64 {
+    type Output = f64ad;
 
-impl f64ad_var {
-    pub fn internal_floor(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().floor(), vec![self.node_idx], DerivativesMode::new_deferred(ConstantDerivativeFunction))
+    fn div(self, rhs: f64ad) -> Self::Output {
+        return f64ad::f64(self) / rhs;
     }
-    pub fn internal_ceil(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().ceil(), vec![self.node_idx], DerivativesMode::new_deferred(ConstantDerivativeFunction))
-    }
-    pub fn internal_round(&self) -> Self {
-        let tape = self.tape;
-        tape.add_node(self.value().round(), vec![self.node_idx], DerivativesMode::new_deferred(ConstantDerivativeFunction))
+}
+impl DivAssign for f64ad {
+    fn div_assign(&mut self, rhs: Self) {
+        *self = *self / rhs;
     }
 }
 
-impl Rem for f64ad_var {
-    type Output = f64ad_var;
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Remainder ///////////////////////////////////////////////////////////////////////////////////////
+
+impl Rem for f64ad {
+    type Output = f64ad;
 
     fn rem(self, rhs: Self) -> Self::Output {
-        let val = rhs.value();
-        if val == 0.0 {
-            panic!("modulo by zero.");
-        }
-
-        return self - rhs * (self / rhs).internal_floor();
+        self - (self / rhs).floor() * rhs
     }
 }
-impl RemAssign for f64ad_var {
+impl RemAssign for f64ad {
     fn rem_assign(&mut self, rhs: Self) {
         *self = *self % rhs;
     }
 }
 
-impl Rem<f64> for f64ad_var {
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Neg /////////////////////////////////////////////////////////////////////////////////////////////
+
+impl Neg for f64ad_var {
     type Output = f64ad_var;
 
-    fn rem(self, rhs: f64) -> Self::Output {
-        if rhs == 0.0 {
-            panic!("modulo by zero.");
+    fn neg(self) -> Self::Output {
+        let res = unsafe {
+            (*self.computation_graph.0).add_node(NodeType::Neg, tiny_vec!([u32; 2] => self.node_idx), tiny_vec!([f64; 1]))
+        };
+        return res;
+    }
+}
+impl Neg for f64ad_locked_var {
+    type Output = f64ad_locked_var;
+
+    fn neg(self) -> Self::Output {
+        f64ad_locked_var_operation_one_parent(&self, None, NodeType::Neg)
+    }
+}
+impl Neg for f64ad {
+    type Output = f64ad;
+
+    fn neg(self) -> Self::Output {
+        return match &self {
+            f64ad::f64ad_var(f) => { f64ad::f64ad_var(f.neg()) }
+            f64ad::f64ad_locked_var(f) => { f64ad::f64ad_locked_var(f.neg()) }
+            f64ad::f64(f) => { f64ad::f64(f.neg()) }
         }
-
-        return self - rhs * (self / rhs).internal_floor();
-    }
-}
-impl RemAssign<f64> for f64ad_var {
-    fn rem_assign(&mut self, rhs: f64) {
-        *self = *self % rhs;
     }
 }
 
-impl Rem<f64ad_var> for f64 {
-    type Output = f64ad_var;
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    fn rem(self, rhs: f64ad_var) -> Self::Output {
-        if rhs.value() == 0.0 {
-            panic!("modulo by zero.");
+impl PartialEq for f64ad_var {
+    fn eq(&self, other: &Self) -> bool {
+        assert_eq!(self.computation_graph_id, other.computation_graph_id);
+        unsafe {
+            match self.mode {
+                ComputationGraphMode::Standard => { self.value() == other.value() }
+                ComputationGraphMode::Lock => { panic!("cannot compute PartialEq on ComputationGraphMode of Lock.  computation graph: {}", (*self.computation_graph.0).name) }
+            }
         }
-
-        return self - rhs * (self / rhs).internal_floor();
+    }
+}
+impl PartialEq for f64ad_locked_var {
+    fn eq(&self, _other: &Self) -> bool {
+        panic!("cannot compute PartialEq on f64ad_locked_var");
+    }
+}
+impl PartialEq for f64ad {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (f64ad::f64ad_var(v1), f64ad::f64ad_var(v2)) => { *v1 == *v2 }
+            (f64ad::f64ad_locked_var(v1), f64ad::f64ad_locked_var(v2)) => { *v1 == *v2 }
+            (f64ad::f64(v1), f64ad::f64(v2)) => { *v1 == *v2 }
+            _ => { panic!("unsupported.") }
+        }
     }
 }
 
-/////////////
+impl PartialOrd for f64ad_var {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        assert_eq!(self.computation_graph_id, other.computation_graph_id);
+
+        match &self.mode {
+            ComputationGraphMode::Standard => {
+                let v1 = self.value();
+                let v2 = self.value();
+
+                if v1 == v2 {
+                    return Some(Ordering::Equal)
+                } else if v1 > v2 {
+                    return Some(Ordering::Greater)
+                } else if v1 < v2 {
+                    return Some(Ordering::Less)
+                } else {
+                    unreachable!();
+                }
+            }
+            ComputationGraphMode::Lock => {
+                unsafe {
+                    panic!("cannot partial_cmp f64ad_var in mode Lock.  Computation graph {}", (*self.computation_graph.0).name)
+                }
+            }
+        }
+    }
+}
+impl PartialOrd for f64ad_locked_var {
+    fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+        panic!("cannot partial_cmp f64ad_locked_var");
+    }
+}
+impl PartialOrd for f64ad {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (f64ad::f64ad_var(v1), f64ad::f64ad_var(v2)) => { v1.partial_cmp(v2) }
+            (f64ad::f64ad_locked_var(v1), f64ad::f64ad_locked_var(v2)) => { v1.partial_cmp(v2) }
+            (f64ad::f64(v1), f64ad::f64(v2)) => { v1.partial_cmp(v2) }
+            (f64ad::f64ad_var(_), f64ad::f64ad_locked_var(_)) => { panic!("unsupported.") }
+            (f64ad::f64ad_locked_var(_), f64ad::f64ad_var(_)) => { panic!("unsupported.") }
+            (f64ad::f64ad_var(v1), f64ad::f64(v2)) => { v1.value().partial_cmp(v2) }
+            (f64ad::f64(v1), f64ad::f64ad_var(v2)) => { v1.partial_cmp(&v2.value()) }
+            (f64ad::f64ad_locked_var(_), f64ad::f64(_)) => { panic!("unsupported.") }
+            (f64ad::f64(_), f64ad::f64ad_locked_var(_)) => { panic!("unsupported.") }
+        }
+    }
+}
 
 impl Display for f64ad {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        f.write_str(&format!("{:?}", self)).expect("error");
+        Ok(())
     }
 }
-
-impl PartialEq for f64ad {
-    fn eq(&self, other: &Self) -> bool {
-        return self.value() == other.value();
-    }
-}
-
-impl PartialOrd for f64ad {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        return self.value().partial_cmp(&other.value());
-    }
-}
-*/
