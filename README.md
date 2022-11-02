@@ -15,7 +15,7 @@ meaning it can be used in any `nalgebra` or `ndarray` computations.
 - Certain functions can be pre-computed and locked to boost performance at run-time.
 
 ## Example 1: Univariate Autodiff
-```
+```rust
 extern crate f64ad;
 use f64ad_core::ComplexField;
 use f64ad_core::f64ad::{ComputationGraph, ComputationGraphMode};
@@ -50,7 +50,7 @@ fn main() {
 ```
 
 ## Example 2: Backwards Mode Multivariate Autodiff
-```
+```rust
 use f64ad_core::ComplexField;
 use f64ad_core::f64ad::{ComputationGraph, ComputationGraphMode};
 
@@ -88,7 +88,7 @@ fn main() {
 ```
 ## Example 3: Forward Mode Multivariate Autodiff
 
-```
+```rust
 use f64ad_core::ComplexField;
 use f64ad_core::f64ad::{ComputationGraph, ComputationGraphMode};
 
