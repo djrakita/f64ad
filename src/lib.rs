@@ -47,6 +47,13 @@
 //! }
 //! ```
 //!
+//! Output
+//! ```text
+//! Result of v.powi(3): f64ad_var(f64ad_var{ value: 8.0, node_idx: 1 })
+//! Backwards mode derivative: f64(12.0)
+//! Forward mode derivative: f64(12.0)
+//! ```
+//!
 //! ## Example 2: Backwards Mode Multivariate Autodiff
 //! ```rust
 //! use f64ad_core::ComplexField;
@@ -84,6 +91,16 @@
 //!     println!("d_result_d_v3: {:?}", d_result_d_v3);
 //! }
 //! ```
+//!
+//! Output
+//! ```text
+//! Result: f64ad_var(f64ad_var{ value: 7.9454605418379876, node_idx: 8 })
+//! d_result_d_v0: f64(-1.6645873461885696)
+//! d_result_d_v1: f64(0.9092974268256817)
+//! d_result_d_v2: f64(0.40074862246915655)
+//! d_result_d_v3: f64(-0.25898004032460736)
+//! ```
+//!
 //! ## Example 3: Forward Mode Multivariate Autodiff
 //!
 //! ```rust
@@ -120,6 +137,15 @@
 //!     println!("d_result1_d_v: {:?}", d_result1_d_v);
 //!     println!("d_result2_d_v: {:?}", d_result2_d_v);
 //! }
+//! ```
+//! Output
+//! ```text
+//! Result0: f64ad_var(f64ad_var{ value: 0.9092974268256817, node_idx: 1 })
+//! Result1: f64ad_var(f64ad_var{ value: -0.4161468365471424, node_idx: 2 })
+//! Result2: f64ad_var(f64ad_var{ value: -2.185039863261519, node_idx: 3 })
+//! d_result0_d_v: f64(-0.4161468365471424)
+//! d_result1_d_v: f64(-0.9092974268256817)
+//! d_result2_d_v: f64(5.774399204041917)
 //! ```
 //!
 //! ## Crate structure
