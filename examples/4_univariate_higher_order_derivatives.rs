@@ -53,5 +53,4 @@ fn main() {
     let d6_result_d_v6 = derivatives.wrt(&v);
     println!("d6_result_d_v6: {:?}", d6_result_d_v6);
     println!("////////////////////////////////////////////////////////////////////////////////////");
-
 }

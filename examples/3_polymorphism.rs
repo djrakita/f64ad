@@ -1,3 +1,4 @@
+extern crate f64ad as f64ad_crate;
 use f64ad_core::f64ad::{ComputationGraph, ComputationGraphMode, f64ad};
 
 // f64ad is an enum here that is a drop-in replacement for f64.  It can track derivative information
