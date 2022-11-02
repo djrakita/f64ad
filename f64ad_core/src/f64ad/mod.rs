@@ -22,10 +22,10 @@ impl f64ad {
             f64ad::f64(f) => { *f }
         }
     }
-    pub fn node_idx(&self) -> u32 {
+    pub fn node_idx(&self) -> usize {
         match self {
-            f64ad::f64ad_var(a) => { a.node_idx }
-            f64ad::f64ad_locked_var(a) => { a.node_idx }
+            f64ad::f64ad_var(a) => { a.node_idx as usize }
+            f64ad::f64ad_locked_var(a) => { a.node_idx as usize }
             f64ad::f64(_) => { panic!("no node idx on f64.") }
         }
     }
@@ -205,6 +205,7 @@ pub (crate) fn f64ad_locked_var_operation_two_parents(lhs: &f64ad_locked_var, rh
         let value = node.node_type.compute_value(&tiny_vec!([u32; 2] => lhs.node_idx, rhs.node_idx), &tiny_vec!([f64; 1]), computation_graph);
         computation_graph.nodes[node_idx].value = value;
         locked_computation_graph.curr_count += 1;
+        locked_computation_graph.push_forward_compute_start_idx += 1;
         return f64ad_locked_var {
             locked_computation_graph_id: lhs.locked_computation_graph_id,
             node_idx: node_idx as u32,
@@ -225,6 +226,7 @@ pub (crate) fn f64ad_locked_var_operation_one_parent(v: &f64ad_locked_var, const
         };
         computation_graph.nodes[node_idx].value = value;
         locked_computation_graph.curr_count += 1;
+        locked_computation_graph.push_forward_compute_start_idx += 1;
         return f64ad_locked_var {
             locked_computation_graph_id: v.locked_computation_graph_id,
             node_idx: node_idx as u32,
@@ -314,7 +316,8 @@ pub enum ComputationGraphMode {
 pub (crate) struct LockedComputationGraph_ {
     id: usize,
     computation_graph: ComputationGraph,
-    curr_count: u32
+    curr_count: u32,
+    push_forward_compute_start_idx: usize
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -338,7 +341,8 @@ impl<T> LockedComputationGraph<T> {
         let locked_computation_graph = LockedComputationGraph_ {
             id,
             computation_graph,
-            curr_count: 0
+            curr_count: 0,
+            push_forward_compute_start_idx: 0
         };
 
         Self {
@@ -354,6 +358,7 @@ impl<T> LockedComputationGraph<T> {
         let node = &mut self.locked_computation_graph.computation_graph.nodes[node_idx];
         assert_eq!(node.parent_nodes.len(), 0, "cannot set value of a non-initial node.");
         node.value = value;
+        self.locked_computation_graph.push_forward_compute_start_idx = node_idx;
     }
     pub fn get_value(&self, idx: usize) -> f64 {
         return self.locked_computation_graph.computation_graph.nodes[idx].value
@@ -366,6 +371,7 @@ impl<T> LockedComputationGraph<T> {
             node_idx: node_idx as u32,
             locked_computation_graph: LockedComputationGraphRawPointer(&mut self.locked_computation_graph as *mut LockedComputationGraph_),
         };
+        self.locked_computation_graph.push_forward_compute_start_idx = self.locked_computation_graph.curr_count as usize;
         self.locked_computation_graph.curr_count += 1;
         return f64ad::f64ad_locked_var(f);
     }
@@ -374,7 +380,8 @@ impl<T> LockedComputationGraph<T> {
     }
     pub fn push_forward_compute(&mut self) {
         let l = self.locked_computation_graph.computation_graph.nodes.len();
-        for idx in 0..l {
+        let start_idx = self.locked_computation_graph.push_forward_compute_start_idx;
+        for idx in start_idx..l {
             let node = &self.locked_computation_graph.computation_graph.nodes[idx];
             match node.node_type {
                 NodeType::None => {  }
