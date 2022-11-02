@@ -126,6 +126,24 @@
 //! This crate is a cargo workspace with two member crates: (1) `f64ad_core`; and (2) `f64ad_core_derive`.
 //! All core implementations for f64ad can be found in `f64ad_core`.  The `f64ad_core_derive` is
 //! currently a placeholder and will be used for procedural macro implementations.
+//!
+//! ## Implementation note on unsafe code
+//! This crate uses `unsafe` implementations under the hood.  I tried to avoid using unsafe, but
+//! I deemed it necessary in this case.  Without using unsafe code, I had two other options:
+//! (1) `f64ad_var` could've used a smart pointer that cannot implement the `Copy` trait and, thus,
+//! `f64ad` could not be `Copy` either.  This would mean that f64ad could not be an easy drop-in
+//! replacement for f64 as annoying .clone() functions would have to be littered everywhere; or (2)
+//! `f64ad_var` could've used a reference to some smart pointer, such as `&RefCell`.  However, certain
+//! libraries, such as `nalgebra`, require their generic inputs to be static,
+//! meaning the reference would've had to be `&'static RefCell` in `f64ad_var`.  In turn,
+//! `ComputationGraph` would also have to be static, meaning it would essentially have to be a
+//! mutable global static variable that would involve unsafe code anyway.  In the end, I viewed
+//! an `unsafe` raw pointer to a `ComputationGraph` as the "best" among three sub-optimal
+//! options.
+//!
+//! I was very careful with my internal implementations given the unsafe nature of the computations;
+//! however, PLEASE be aware that the computation graph should NEVER GO OUT OF SCOPE IF ANY OF
+//! ITS VARIABLES ARE STILL IN USE.
 
 extern crate f64ad_core;
 extern crate f64ad_core_derive;
