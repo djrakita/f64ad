@@ -12,3 +12,5 @@ Cargo.lock
 f64ad_book
 .DS_Store
 .idea/
+
+src/bin/*
