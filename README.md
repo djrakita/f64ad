@@ -11,17 +11,6 @@ Rust programming language.  Utilizing Rust's extensive operator overloading and 
 features, f64ad can be thought of as a drop-in replacement for f64 that affords forward mode
 or backwards mode automatic differentiation on any downstream computation in Rust.
 
-## Citing f64ad 
-
-If you use any part of the f64ad library in your research, please cite the software as follows:
-
-```string
- @misc{rakita_2022, url={https://djrakita.github.io/f64ad/}, 
- author={Rakita, Daniel}, 
- title={f64ad: Efficient and Flexible Automatic Differentiation in Rust}
- year={2022}} 
-```
-
 ## Key features
 - f64ad supports reverse mode or forward mode automatic differentiation
 - f64ad uses polymorphism such that any `f64ad` object can either be considered a derivative 
@@ -32,6 +21,17 @@ to "turn on" derivatives with respect to these values whenever you need them.
 standard f64.  For example, it even implements the `RealField` and `ComplexField` traits,
 meaning it can be used in any `nalgebra` or `ndarray` computations.
 - Certain functions can be pre-computed and locked to boost performance at run-time.
+
+## Citing f64ad 
+
+If you use any part of the f64ad library in your research, please cite the software as follows:
+
+```string
+ @misc{rakita_2022, url={https://djrakita.github.io/f64ad/}, 
+ author={Rakita, Daniel}, 
+ title={f64ad: Efficient and Flexible Automatic Differentiation in Rust}
+ year={2022}} 
+```
 
 ## Example 1: Univariate Autodiff
 ```rust
