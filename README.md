@@ -4,14 +4,14 @@
 
 | [Documentation](https://djrakita.github.io/f64ad/) | [API](https://docs.rs/f64ad/0.0.2/) |
 
-# Introduction
+## Introduction
 
 This crate brings easy to use, efficient, and highly flexible automatic differentiation to the
 Rust programming language.  Utilizing Rust's extensive operator overloading and expressive Enum
 features, f64ad can be thought of as a drop-in replacement for f64 that affords forward mode
 or backwards mode automatic differentiation on any downstream computation in Rust.
 
-# Citing f64ad 
+## Citing f64ad 
 
 If you use any part of the f64ad library in your research, please cite the software as follows:
 
