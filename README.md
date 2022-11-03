@@ -1,5 +1,9 @@
 # f64ad
 
+[![Crates.io](https://img.shields.io/crates/v/f64ad.svg)](https://crates.io/crates/f64ad)
+
+| [Documentation](https://djrakita.github.io/f64ad/) | [API](https://docs.rs/f64ad/0.0.2/) | 
+
 # Introduction
 
 This crate brings easy to use, efficient, and highly flexible automatic differentiation to the
