@@ -18,7 +18,6 @@
 //!
 //! ## Example 1: Univariate Autodiff
 //! ```rust
-//! extern crate f64ad;
 //! use f64ad_core::ComplexField;
 //! use f64ad_core::f64ad::{ComputationGraph, ComputationGraphMode};
 //!
