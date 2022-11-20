@@ -1,5 +1,5 @@
 use nalgebra::SimdValue;
-use crate::f64ad::{f64ad};
+use crate::f64ad::f64ad;
 
 impl SimdValue for f64ad {
     type Element = f64ad;

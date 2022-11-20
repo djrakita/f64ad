@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Locked Computation Graphs - f64ad</title>
+        <title>Jacobian - f64ad</title>
 
 
         <!-- Custom HTML head -->
@@ -83,7 +83,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded affix "><a href="../introduction.html">Introduction</a></li><li class="chapter-item expanded "><a href="../getting_started/getting_started_0.html"><strong aria-hidden="true">1.</strong> Getting Started</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="../getting_started/f64ad_installation.html"><strong aria-hidden="true">1.1.</strong> f64ad Installation</a></li><li class="chapter-item expanded "><a href="../getting_started/rust_installation.html"><strong aria-hidden="true">1.2.</strong> Rust Installation</a></li><li class="chapter-item expanded "><a href="../getting_started/citing_f64ad.html"><strong aria-hidden="true">1.3.</strong> Citing f64ad</a></li></ol></li><li class="chapter-item expanded "><a href="../examples/examples_0.html"><strong aria-hidden="true">2.</strong> Examples</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="../examples/example1_univariate_autodiff.html"><strong aria-hidden="true">2.1.</strong> Univariate Autodiff</a></li><li class="chapter-item expanded "><a href="../examples/example2_backwards_mode_multivariate_autodiff.html"><strong aria-hidden="true">2.2.</strong> Backwards Mode Multivariate Autodiff</a></li><li class="chapter-item expanded "><a href="../examples/example3_forward_mode_multivariate_autodiff.html"><strong aria-hidden="true">2.3.</strong> Forward Mode Multivariate Autodiff</a></li><li class="chapter-item expanded "><a href="../examples/example4_polymorphism.html"><strong aria-hidden="true">2.4.</strong> Polymorphism</a></li><li class="chapter-item expanded "><a href="../examples/example5_univariate_higher_order_derivatives.html"><strong aria-hidden="true">2.5.</strong> Univariate Higher Order Derivatives</a></li><li class="chapter-item expanded "><a href="../examples/example6_multivariate_higher_order_derivatives.html"><strong aria-hidden="true">2.6.</strong> Multivariate Higher Order Derivatives</a></li><li class="chapter-item expanded "><a href="../examples/example7_locked_computation_graphs.html" class="active"><strong aria-hidden="true">2.7.</strong> Locked Computation Graphs</a></li></ol></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded affix "><a href="../introduction.html">Introduction</a></li><li class="chapter-item expanded "><a href="../getting_started/getting_started_0.html"><strong aria-hidden="true">1.</strong> Getting Started</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="../getting_started/f64ad_installation.html"><strong aria-hidden="true">1.1.</strong> f64ad Installation</a></li><li class="chapter-item expanded "><a href="../getting_started/rust_installation.html"><strong aria-hidden="true">1.2.</strong> Rust Installation</a></li><li class="chapter-item expanded "><a href="../getting_started/citing_f64ad.html"><strong aria-hidden="true">1.3.</strong> Citing f64ad</a></li></ol></li><li class="chapter-item expanded "><a href="../examples/examples_0.html"><strong aria-hidden="true">2.</strong> Examples</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="../examples/example1_univariate_autodiff.html"><strong aria-hidden="true">2.1.</strong> Univariate Autodiff</a></li><li class="chapter-item expanded "><a href="../examples/example2_backwards_mode_multivariate_autodiff.html"><strong aria-hidden="true">2.2.</strong> Backwards Mode Multivariate Autodiff</a></li><li class="chapter-item expanded "><a href="../examples/example3_forward_mode_multivariate_autodiff.html"><strong aria-hidden="true">2.3.</strong> Forward Mode Multivariate Autodiff</a></li><li class="chapter-item expanded "><a href="../examples/example4_polymorphism.html"><strong aria-hidden="true">2.4.</strong> Polymorphism</a></li><li class="chapter-item expanded "><a href="../examples/example5_univariate_higher_order_derivatives.html"><strong aria-hidden="true">2.5.</strong> Univariate Higher Order Derivatives</a></li><li class="chapter-item expanded "><a href="../examples/example6_multivariate_higher_order_derivatives.html"><strong aria-hidden="true">2.6.</strong> Multivariate Higher Order Derivatives</a></li><li class="chapter-item expanded "><a href="../examples/example7_jacobian.html" class="active"><strong aria-hidden="true">2.7.</strong> Jacobian</a></li></ol></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
         </nav>
@@ -144,77 +144,77 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="example-7-locked-computation-graphs"><a class="header" href="#example-7-locked-computation-graphs">Example 7: Locked Computation Graphs</a></h1>
-<p>Any computations that do not have any conditional branches can be pre-computed and locked using a <code>LockedComputationGraph</code> in f64ad.  Any computation that falls into this category</p>
+                        <h1 id="example-7-jacobian"><a class="header" href="#example-7-jacobian">Example 7: Jacobian</a></h1>
 <pre><pre class="playground"><code class="language-rust">use f64ad_core::ComplexField;
-use f64ad_core::f64ad::{ComputationGraph, ComputationGraphMode};
+use f64ad_core::f64ad::{ComputationGraphMode, f64ad_jacobian, GlobalComputationGraphs};
 
 fn main() {
-    // Create a computation graph with mode `Lock`.  This signals that all computations that happen
-    // on this graph will eventually be locked and, thus, only certain programs without conditional
-    // branching will be compatible.  Any incompatible programs will panic.
-    let mut computation_graph = ComputationGraph::new(ComputationGraphMode::Lock, None);
-    let v = computation_graph.spawn_f64ad_var(3.0);
+    // Create a computation graph.
+    let computation_graph = GlobalComputationGraphs::get_with_reset(None, None, ComputationGraphMode::Standard);
 
-    let result = v.cos();
+    // Spawn an f64ad variables from computation graph.
+    let v0 = computation_graph.spawn_f64ad_var(2.0);
+    let v1 = computation_graph.spawn_f64ad_var(4.0);
 
-    // This locks the computation graph.  The `result` variable is taken as input here and is stored
-    // by the locked graph.
-    let mut function_locked_computation_graph = computation_graph.lock(None, result);
-
-    // We can now replace the value of `v` here and use the `push_forward_compute` function to
-    // recompute all downstream values on the locked function.
-    function_locked_computation_graph.set_value(0, 0.0);
-    function_locked_computation_graph.push_forward_compute();
-    let new_output = function_locked_computation_graph.get_value(function_locked_computation_graph.template_output().node_idx());
-    println!(&quot;v.cos() at v = 0.0: {:?}&quot;, new_output);
-
-    // Here is another example where `v` is set with a value of 1.0.
-    function_locked_computation_graph.set_value(0, 1.0);
-    function_locked_computation_graph.push_forward_compute();
-    let new_output = function_locked_computation_graph.get_value(function_locked_computation_graph.template_output().node_idx());
-    println!(&quot;v.cos() at v = 1.0: {:?}&quot;, new_output);
+    let result1 = v0.powf(v1);
+    let result2 = v1.log(v0);
+    println!(&quot;Result1: {:?}&quot;, result1);
+    println!(&quot;Result2: {:?}&quot;, result2);
     println!(&quot;////////////////////////////////////////////////////////////////////////////////////&quot;);
 
-    // Because derivative/ gradient computations do not ever require conditional branching,
-    // any derivatives over any compatible lockable functions can be locked as well.
-    let derivatives = result.backwards_mode_grad(true);
-    let derivative = derivatives.wrt(&amp;v);
-    let mut derivative_locked_computation_graph = computation_graph.lock(None, derivative);
+    // Computes the first order jacobian and prints the summary
+    let first_order_jacobian = f64ad_jacobian(&amp;[v0, v1], &amp;[result1, result2], 1);
+    first_order_jacobian.print_summary();
 
-    // Here, we are pushing forward the computation on the derivative of v.cos() at v = 0.0
-    derivative_locked_computation_graph.set_value(0, 0.0);
-    derivative_locked_computation_graph.push_forward_compute();
-    let new_output = derivative_locked_computation_graph.get_value(derivative_locked_computation_graph.template_output().node_idx());
-    println!(&quot;derivative of v.cos() at v = 0.0: {:?}&quot;, new_output);
+    println!(&quot;////////////////////////////////////////////////////////////////////////////////////&quot;);
 
-    // Here, we are pushing forward the computation on the derivative of v.cos() at v = 1.0
-    derivative_locked_computation_graph.set_value(0, 1.0);
-    derivative_locked_computation_graph.push_forward_compute();
-    let new_output = derivative_locked_computation_graph.get_value(derivative_locked_computation_graph.template_output().node_idx());
-    println!(&quot;derivative of v.cos() at v = 1.0: {:?}&quot;, new_output);
-
-    // Locked computation graphs can also spawn `locked_vars`.  These are also variants of the f64ad
-    // Enum, thus they can also operate in any function.  However, after spawning variables, all downstream
-    // computations must be EXACTLY THE SAME as the functions used on the original ComputationGraph
-    // prior to locking (if functions are different, an error will be thrown).  Thus, in this example,
-    // we call v.cos() on the locked_var because it is the same as the original computation above.
-    // The locked_computation_graph then automatically updates its internal data and correctly
-    // computes the derivative after the push_forward_compute function.
-    let v = derivative_locked_computation_graph.spawn_locked_var(2.0);
-    v.cos();
-    derivative_locked_computation_graph.push_forward_compute();
-    let new_output = derivative_locked_computation_graph.get_value(derivative_locked_computation_graph.template_output().node_idx());
-    println!(&quot;derivative of v.cos() at v = 2.0: {:?}&quot;, new_output);
+    // Computes the fourth order jacobian and prints the summary
+    let higher_order_jacobian = f64ad_jacobian(&amp;[v0, v1], &amp;[result1, result2], 4);
+    higher_order_jacobian.print_summary();
+}
 }
 </code></pre></pre>
 <p>Output</p>
-<pre><code class="language-text">v.cos() at v = 0.0: 1.0
-v.cos() at v = 1.0: 0.5403023058681398
+<pre><code class="language-text">Result1: f64ad_var(f64ad_var{ value: 16.0 node_idx: 2 })
+Result2: f64ad_var(f64ad_var{ value: 2.0 node_idx: 3 })
 ////////////////////////////////////////////////////////////////////////////////////
-derivative of v.cos() at v = 0.0: 0.0
-derivative of v.cos() at v = 1.0: -0.8414709848078965
-derivative of v.cos() at v = 2.0: -0.9092974268256817
+0 --- output: 0, inputs wrt: [0], value: 32.0
+1 --- output: 0, inputs wrt: [1], value: 11.090354888959125
+2 --- output: 1, inputs wrt: [0], value: -1.4426950408889634
+3 --- output: 1, inputs wrt: [1], value: 0.36067376022224085
+////////////////////////////////////////////////////////////////////////////////////
+0 --- output: 0, inputs wrt: [0, 0, 0, 0], value: 24.0
+1 --- output: 0, inputs wrt: [0, 0, 0, 1], value: 85.27106466687738
+2 --- output: 0, inputs wrt: [0, 0, 1, 0], value: 85.27106466687738
+3 --- output: 0, inputs wrt: [0, 0, 1, 1], value: 69.8779867794306
+4 --- output: 0, inputs wrt: [0, 1, 0, 0], value: 85.27106466687738
+5 --- output: 0, inputs wrt: [0, 1, 0, 1], value: 69.8779867794306
+6 --- output: 0, inputs wrt: [0, 1, 1, 0], value: 69.8779867794306
+7 --- output: 0, inputs wrt: [0, 1, 1, 1], value: 22.187661197682576
+8 --- output: 0, inputs wrt: [1, 0, 0, 0], value: 85.27106466687738
+9 --- output: 0, inputs wrt: [1, 0, 0, 1], value: 69.8779867794306
+10 --- output: 0, inputs wrt: [1, 0, 1, 0], value: 69.8779867794306
+11 --- output: 0, inputs wrt: [1, 0, 1, 1], value: 22.187661197682576
+12 --- output: 0, inputs wrt: [1, 1, 0, 0], value: 69.8779867794306
+13 --- output: 0, inputs wrt: [1, 1, 0, 1], value: 22.187661197682576
+14 --- output: 0, inputs wrt: [1, 1, 1, 0], value: 22.187661197682576
+15 --- output: 0, inputs wrt: [1, 1, 1, 1], value: 3.693361577329335
+16 --- output: 1, inputs wrt: [0, 0, 0, 0], value: 33.31458966591519
+17 --- output: 1, inputs wrt: [0, 0, 0, 1], value: -1.5053751004845806
+18 --- output: 1, inputs wrt: [0, 0, 1, 0], value: -1.5053751004845806
+19 --- output: 1, inputs wrt: [0, 0, 1, 1], value: -0.12635828742686595
+20 --- output: 1, inputs wrt: [0, 1, 0, 0], value: -1.5053751004845806
+21 --- output: 1, inputs wrt: [0, 1, 0, 1], value: -0.12635828742686595
+22 --- output: 1, inputs wrt: [0, 1, 1, 0], value: -0.12635828742686595
+23 --- output: 1, inputs wrt: [0, 1, 1, 1], value: -0.03252139032821262
+24 --- output: 1, inputs wrt: [1, 0, 0, 0], value: -1.505375100484581
+25 --- output: 1, inputs wrt: [1, 0, 0, 1], value: -0.1263582874268659
+26 --- output: 1, inputs wrt: [1, 0, 1, 0], value: -0.12635828742686595
+27 --- output: 1, inputs wrt: [1, 0, 1, 1], value: -0.032521390328212586
+28 --- output: 1, inputs wrt: [1, 1, 0, 0], value: -0.12635828742686595
+29 --- output: 1, inputs wrt: [1, 1, 0, 1], value: -0.0325213903282126
+30 --- output: 1, inputs wrt: [1, 1, 1, 0], value: -0.03252139032821263
+31 --- output: 1, inputs wrt: [1, 1, 1, 1], value: -0.033813165020835076
 </code></pre>
 
                     </main>

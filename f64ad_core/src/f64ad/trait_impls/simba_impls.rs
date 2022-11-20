@@ -24,9 +24,7 @@ impl RealField for f64ad {
         match (&self, &other) {
             (f64ad::f64ad_var(v1), f64ad::f64ad_var(v2)) => {
                 assert_eq!(v1.computation_graph_id, v2.computation_graph_id);
-                let res = unsafe {
-                    (*v1.computation_graph.0).add_node(NodeType::MaxTwoParents, tiny_vec!([u32; 2] => v1.node_idx, v2.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = v1.computation_graph.add_node(NodeType::MaxTwoParents, tiny_vec!([u32; 2] => v1.node_idx, v2.node_idx), tiny_vec!([f64; 1]));
                 return f64ad::f64ad_var(res);
             }
             (f64ad::f64ad_locked_var(v1), f64ad::f64ad_locked_var(v2)) => {
@@ -39,15 +37,11 @@ impl RealField for f64ad {
             (f64ad::f64ad_var(_), f64ad::f64ad_locked_var(_)) => { panic!("unsupported.") }
             (f64ad::f64ad_locked_var(_), f64ad::f64ad_var(_)) => { panic!("unsupported.") }
             (f64ad::f64ad_var(v1), f64ad::f64(v2)) => {
-                let res = unsafe {
-                    (*v1.computation_graph.0).add_node(NodeType::MaxOneParent, tiny_vec!([u32; 2] => v1.node_idx), tiny_vec!([f64; 1] => *v2))
-                };
+                let res = v1.computation_graph.add_node(NodeType::MaxOneParent, tiny_vec!([u32; 2] => v1.node_idx), tiny_vec!([f64; 1] => *v2));
                 return f64ad::f64ad_var(res);
             }
             (f64ad::f64(v1), f64ad::f64ad_var(v2)) => {
-                let res = unsafe {
-                    (*v2.computation_graph.0).add_node(NodeType::MaxOneParent, tiny_vec!([u32; 2] => v2.node_idx), tiny_vec!([f64; 1] => *v1))
-                };
+                let res = v2.computation_graph.add_node(NodeType::MaxOneParent, tiny_vec!([u32; 2] => v2.node_idx), tiny_vec!([f64; 1] => *v1));
                 return f64ad::f64ad_var(res);
             }
             (f64ad::f64ad_locked_var(v1), f64ad::f64(v2)) => {
@@ -64,9 +58,7 @@ impl RealField for f64ad {
         match (&self, &other) {
             (f64ad::f64ad_var(v1), f64ad::f64ad_var(v2)) => {
                 assert_eq!(v1.computation_graph_id, v2.computation_graph_id);
-                let res = unsafe {
-                    (*v1.computation_graph.0).add_node(NodeType::MinTwoParents, tiny_vec!([u32; 2] => v1.node_idx, v2.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = v1.computation_graph.add_node(NodeType::MinTwoParents, tiny_vec!([u32; 2] => v1.node_idx, v2.node_idx), tiny_vec!([f64; 1]));
                 return f64ad::f64ad_var(res);
             }
             (f64ad::f64ad_locked_var(v1), f64ad::f64ad_locked_var(v2)) => {
@@ -79,15 +71,11 @@ impl RealField for f64ad {
             (f64ad::f64ad_var(_), f64ad::f64ad_locked_var(_)) => { panic!("unsupported.") }
             (f64ad::f64ad_locked_var(_), f64ad::f64ad_var(_)) => { panic!("unsupported.") }
             (f64ad::f64ad_var(v1), f64ad::f64(v2)) => {
-                let res = unsafe {
-                    (*v1.computation_graph.0).add_node(NodeType::MinOneParent, tiny_vec!([u32; 2] => v1.node_idx), tiny_vec!([f64; 1] => *v2))
-                };
+                let res = v1.computation_graph.add_node(NodeType::MinOneParent, tiny_vec!([u32; 2] => v1.node_idx), tiny_vec!([f64; 1] => *v2));
                 return f64ad::f64ad_var(res);
             }
             (f64ad::f64(v1), f64ad::f64ad_var(v2)) => {
-                let res = unsafe {
-                    (*v2.computation_graph.0).add_node(NodeType::MinOneParent, tiny_vec!([u32; 2] => v2.node_idx), tiny_vec!([f64; 1] => *v1))
-                };
+                let res = v2.computation_graph.add_node(NodeType::MinOneParent, tiny_vec!([u32; 2] => v2.node_idx), tiny_vec!([f64; 1] => *v1));
                 return f64ad::f64ad_var(res);
             }
             (f64ad::f64ad_locked_var(v1), f64ad::f64(v2)) => {
@@ -109,9 +97,7 @@ impl RealField for f64ad {
         match (&self, &other) {
             (f64ad::f64ad_var(v1), f64ad::f64ad_var(v2)) => {
                 assert_eq!(v1.computation_graph_id, v2.computation_graph_id);
-                let res = unsafe {
-                    (*v1.computation_graph.0).add_node(NodeType::Atan2TwoParents, tiny_vec!([u32; 2] => v1.node_idx, v2.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = v1.computation_graph.add_node(NodeType::Atan2TwoParents, tiny_vec!([u32; 2] => v1.node_idx, v2.node_idx), tiny_vec!([f64; 1]));
                 return f64ad::f64ad_var(res);
             }
             (f64ad::f64ad_locked_var(v1), f64ad::f64ad_locked_var(v2)) => {
@@ -124,15 +110,11 @@ impl RealField for f64ad {
             (f64ad::f64ad_var(_), f64ad::f64ad_locked_var(_)) => { panic!("unsupported.") }
             (f64ad::f64ad_locked_var(_), f64ad::f64ad_var(_)) => { panic!("unsupported.") }
             (f64ad::f64ad_var(v1), f64ad::f64(v2)) => {
-                let res = unsafe {
-                    (*v1.computation_graph.0).add_node(NodeType::Atan2OneParentLeft, tiny_vec!([u32; 2] => v1.node_idx), tiny_vec!([f64; 1] => *v2))
-                };
+                let res = v1.computation_graph.add_node(NodeType::Atan2OneParentLeft, tiny_vec!([u32; 2] => v1.node_idx), tiny_vec!([f64; 1] => *v2));
                 return f64ad::f64ad_var(res);
             }
             (f64ad::f64(v1), f64ad::f64ad_var(v2)) => {
-                let res = unsafe {
-                    (*v2.computation_graph.0).add_node(NodeType::Atan2OneParentRight, tiny_vec!([u32; 2] => v2.node_idx), tiny_vec!([f64; 1] => *v1))
-                };
+                let res = v2.computation_graph.add_node(NodeType::Atan2OneParentRight, tiny_vec!([u32; 2] => v2.node_idx), tiny_vec!([f64; 1] => *v1));
                 return f64ad::f64ad_var(res);
             }
             (f64ad::f64ad_locked_var(v1), f64ad::f64(v2)) => {
@@ -229,9 +211,7 @@ impl ComplexField for f64ad {
     fn floor(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Floor, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Floor, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -245,9 +225,7 @@ impl ComplexField for f64ad {
     fn ceil(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Ceil, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Ceil, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -261,9 +239,7 @@ impl ComplexField for f64ad {
     fn round(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Round, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Round, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -277,9 +253,7 @@ impl ComplexField for f64ad {
     fn trunc(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Trunc, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Trunc, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -293,9 +267,7 @@ impl ComplexField for f64ad {
     fn fract(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Fract, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Fract, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -318,9 +290,7 @@ impl ComplexField for f64ad {
     fn sin(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Sin, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Sin, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -334,9 +304,7 @@ impl ComplexField for f64ad {
     fn cos(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Cos, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Cos, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -353,9 +321,7 @@ impl ComplexField for f64ad {
     fn tan(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Tan, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Tan, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -369,9 +335,7 @@ impl ComplexField for f64ad {
     fn asin(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Asin, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Asin, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -385,9 +349,7 @@ impl ComplexField for f64ad {
     fn acos(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Acos, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res  = f.computation_graph.add_node(NodeType::Acos, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -401,9 +363,7 @@ impl ComplexField for f64ad {
     fn atan(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Atan, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Atan, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -417,9 +377,7 @@ impl ComplexField for f64ad {
     fn sinh(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Sinh, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Sinh, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -433,9 +391,7 @@ impl ComplexField for f64ad {
     fn cosh(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Cosh, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Cosh, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -449,9 +405,7 @@ impl ComplexField for f64ad {
     fn tanh(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Tanh, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Tanh, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -465,9 +419,7 @@ impl ComplexField for f64ad {
     fn asinh(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Asinh, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Asinh, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -481,9 +433,7 @@ impl ComplexField for f64ad {
     fn acosh(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Acosh, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Acosh, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -497,9 +447,7 @@ impl ComplexField for f64ad {
     fn atanh(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Atanh, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Atanh, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -514,9 +462,7 @@ impl ComplexField for f64ad {
         match (&self, &base) {
             (f64ad::f64ad_var(v1), f64ad::f64ad_var(v2)) => {
                 assert_eq!(v1.computation_graph_id, v2.computation_graph_id);
-                let res = unsafe {
-                    (*v1.computation_graph.0).add_node(NodeType::LogTwoParents, tiny_vec!([u32; 2] => v1.node_idx, v2.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = v1.computation_graph.add_node(NodeType::LogTwoParents, tiny_vec!([u32; 2] => v1.node_idx, v2.node_idx), tiny_vec!([f64; 1]));
                 return f64ad::f64ad_var(res);
             }
             (f64ad::f64ad_locked_var(v1), f64ad::f64ad_locked_var(v2)) => {
@@ -529,20 +475,17 @@ impl ComplexField for f64ad {
             (f64ad::f64ad_var(_), f64ad::f64ad_locked_var(_)) => { panic!("unsupported.") }
             (f64ad::f64ad_locked_var(_), f64ad::f64ad_var(_)) => { panic!("unsupported.") }
             (f64ad::f64ad_var(v1), f64ad::f64(v2)) => {
-                let res = unsafe {
-                    (*v1.computation_graph.0).add_node(NodeType::LogOneParentArgument, tiny_vec!([u32; 2] => v1.node_idx), tiny_vec!([f64; 1] => *v2))
-                };
+                let res = v1.computation_graph.add_node(NodeType::LogOneParentArgument, tiny_vec!([u32; 2] => v1.node_idx), tiny_vec!([f64; 1] => *v2));
                 return f64ad::f64ad_var(res);
             }
             (f64ad::f64(v1), f64ad::f64ad_var(v2)) => {
-                let res = unsafe {
-                    (*v2.computation_graph.0).add_node(NodeType::LogOneParentBase, tiny_vec!([u32; 2] => v2.node_idx), tiny_vec!([f64; 1] => *v1))
-                };
+                let res = v2.computation_graph.add_node(NodeType::LogOneParentBase, tiny_vec!([u32; 2] => v2.node_idx), tiny_vec!([f64; 1] => *v1));
                 return f64ad::f64ad_var(res);
             }
             (f64ad::f64ad_locked_var(v1), f64ad::f64(v2)) => {
                 let res = f64ad_locked_var_operation_one_parent(v1, Some(*v2), NodeType::LogOneParentArgument);
                 return f64ad::f64ad_locked_var(res);
+
             }
             (f64ad::f64(v1), f64ad::f64ad_locked_var(v2)) => {
                 let res = f64ad_locked_var_operation_one_parent(v2, Some(*v1), NodeType::LogOneParentBase);
@@ -556,9 +499,7 @@ impl ComplexField for f64ad {
     fn sqrt(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Sqrt, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Sqrt, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -572,9 +513,7 @@ impl ComplexField for f64ad {
     fn exp(self) -> Self {
         return match &self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Exp, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Exp, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -592,9 +531,7 @@ impl ComplexField for f64ad {
         match (&self, &n) {
             (f64ad::f64ad_var(v1), f64ad::f64ad_var(v2)) => {
                 assert_eq!(v1.computation_graph_id, v2.computation_graph_id);
-                let res = unsafe {
-                    (*v1.computation_graph.0).add_node(NodeType::PowTwoParents, tiny_vec!([u32; 2] => v1.node_idx, v2.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = v1.computation_graph.add_node(NodeType::PowTwoParents, tiny_vec!([u32; 2] => v1.node_idx, v2.node_idx), tiny_vec!([f64; 1]));
                 return f64ad::f64ad_var(res);
             }
             (f64ad::f64ad_locked_var(v1), f64ad::f64ad_locked_var(v2)) => {
@@ -607,15 +544,11 @@ impl ComplexField for f64ad {
             (f64ad::f64ad_var(_), f64ad::f64ad_locked_var(_)) => { panic!("unsupported.") }
             (f64ad::f64ad_locked_var(_), f64ad::f64ad_var(_)) => { panic!("unsupported.") }
             (f64ad::f64ad_var(v1), f64ad::f64(v2)) => {
-                let res = unsafe {
-                    (*v1.computation_graph.0).add_node(NodeType::PowOneParentArgument, tiny_vec!([u32; 2] => v1.node_idx), tiny_vec!([f64; 1] => *v2))
-                };
+                let res = v1.computation_graph.add_node(NodeType::PowOneParentArgument, tiny_vec!([u32; 2] => v1.node_idx), tiny_vec!([f64; 1] => *v2));
                 return f64ad::f64ad_var(res);
             }
             (f64ad::f64(v1), f64ad::f64ad_var(v2)) => {
-                let res = unsafe {
-                    (*v2.computation_graph.0).add_node(NodeType::PowOneParentExponent, tiny_vec!([u32; 2] => v2.node_idx), tiny_vec!([f64; 1] => *v1))
-                };
+                let res = v2.computation_graph.add_node(NodeType::PowOneParentExponent, tiny_vec!([u32; 2] => v2.node_idx), tiny_vec!([f64; 1] => *v1));
                 return f64ad::f64ad_var(res);
             }
             (f64ad::f64ad_locked_var(v1), f64ad::f64(v2)) => {
@@ -632,11 +565,9 @@ impl ComplexField for f64ad {
     fn is_finite(&self) -> bool {
         match self {
             f64ad::f64ad_var(f) => {
-                unsafe {
-                    match &f.mode {
-                        ComputationGraphMode::Standard => { return f.value().is_finite() }
-                        ComputationGraphMode::Lock => { panic!("cannot call is_finite on computation graph of mode Lock.  Computation graph {}", (*f.computation_graph.0).name) }
-                    }
+                match &f.mode {
+                    ComputationGraphMode::Standard => { return f.value().is_finite() }
+                    ComputationGraphMode::Lock => { panic!("cannot call is_finite on computation graph of mode Lock.  Computation graph {}", f.computation_graph_id); }
                 }
             }
             f64ad::f64ad_locked_var(_) => { panic!("cannot call is_finite on f64ad_locked_var."); }

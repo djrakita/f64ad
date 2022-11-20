@@ -1,9 +1,9 @@
 use f64ad_core::ComplexField;
-use f64ad_core::f64ad::{ComputationGraph, ComputationGraphMode};
+use f64ad_core::f64ad::{ComputationGraphMode, GlobalComputationGraphs};
 
 fn main() {
-    // Create a standard computation graph.
-    let mut computation_graph = ComputationGraph::new(ComputationGraphMode::Standard, None);
+    // Create a computation graph.
+    let computation_graph = GlobalComputationGraphs::get_with_reset(None, None, ComputationGraphMode::Standard);
 
     // Spawn an f64ad variable with a value of 2.
     let v = computation_graph.spawn_f64ad_var(2.0);

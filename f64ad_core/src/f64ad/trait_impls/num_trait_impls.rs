@@ -1,6 +1,6 @@
 use num_traits::{FromPrimitive, Num, One, Signed, Zero};
 use tinyvec::tiny_vec;
-use crate::f64ad::{f64ad, f64ad_locked_var_operation_one_parent, NodeType};
+use crate::f64ad::{f64ad, NodeType, f64ad_locked_var_operation_one_parent};
 
 impl Zero for f64ad {
     fn zero() -> Self {
@@ -31,9 +31,7 @@ impl Signed for f64ad {
     fn abs(&self) -> Self {
         return match self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Abs, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Abs, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
@@ -56,9 +54,7 @@ impl Signed for f64ad {
     fn signum(&self) -> Self {
         return match self {
             f64ad::f64ad_var(f) => {
-                let res = unsafe {
-                    (*f.computation_graph.0).add_node(NodeType::Signum, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]))
-                };
+                let res = f.computation_graph.add_node(NodeType::Signum, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
                 f64ad::f64ad_var(res)
             }
             f64ad::f64ad_locked_var(f) => {
