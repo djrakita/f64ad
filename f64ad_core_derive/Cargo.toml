@@ -1,6 +1,6 @@
 [package]
 name = "f64ad_core_derive"
-version = "0.0.2"
+version = "0.0.3"
 description = "Easy to use, efficient, and highly flexible automatic differentiation in Rust."
 edition = "2021"
 keywords = ["math", "autodiff", "ad"]
@@ -15,4 +15,4 @@ proc-macro = true
 [dependencies]
 syn = { version = "1.0.99", features = ["full" ,"extra-traits"] }
 quote = "1.0.21"
-f64ad_core = { path = "../f64ad_core", version = "0.0.2"}
+f64ad_core = { path = "../f64ad_core", version = "0.0.3"}

@@ -1,6 +1,6 @@
 [package]
 name = "f64ad_core"
-version = "0.0.2"
+version = "0.0.3"
 description = "Easy to use, efficient, and highly flexible automatic differentiation in Rust."
 edition = "2021"
 keywords = ["math", "autodiff", "ad"]
