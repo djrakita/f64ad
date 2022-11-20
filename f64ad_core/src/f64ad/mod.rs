@@ -7,10 +7,10 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Rem, RemAssign, Sub, SubAssign};
-use std::sync::{Mutex};
-use tinyvec::{tiny_vec, TinyVec};
+use std::sync::{Mutex, RwLock};
 use rand::prelude::*;
-use once_cell::sync::OnceCell;
+use rayon::iter::ParallelIterator;
+use rayon::prelude::IntoParallelRefIterator;
 use simba::scalar::ComplexField;
 
 #[allow(non_camel_case_types)]
@@ -51,20 +51,20 @@ impl f64ad {
             _ => { panic!("cannot compute grad on f64.") }
         }
     }
-    fn transfer_to_other_global_computation_graph(&mut self, name: Option<&str>, idx: Option<usize>) {
+    fn forward_mode_grad_with_computation_graph_clone(&self, add_to_computation_graph: bool, computation_graph_to_clone: &ComputationGraph) -> (ForwardModeGradOutput, ComputationGraph) {
+        let v = self.value();
+        assert!(!v.is_nan() && v.is_finite());
         match self {
-            f64ad::f64ad_var(v) => {
-                v.transfer_to_other_global_computation_graph(name, idx);
-            }
-            _ => { panic!("cannot transfer an f64ad that is not an f64ad_var.") }
+            f64ad::f64ad_var(f) => { f.forward_mode_grad_with_computation_graph_clone(add_to_computation_graph, computation_graph_to_clone) }
+            _ => { panic!("cannot compute grad on f64.") }
         }
     }
-    fn clone_computation_graph_to_other_global_computation_graph(&self, name: Option<&str>, idx: Option<usize>) {
+    fn backwards_mode_grad_with_computation_graph_clone(&self, add_to_computation_graph: bool, computation_graph_to_clone: &ComputationGraph) -> (BackwardsModeGradOutput, ComputationGraph) {
+        let v = self.value();
+        assert!(!v.is_nan() && v.is_finite());
         match self {
-            f64ad::f64ad_var(v) => {
-                v.clone_computation_graph_to_other_global_computation_graph(name, idx);
-            }
-            _ => { panic!("cannot clone computation graph of an f64ad that is not an f64ad_var.") }
+            f64ad::f64ad_var(f) => { f.backwards_mode_grad_with_computation_graph_clone(add_to_computation_graph, computation_graph_to_clone) }
+            _ => { panic!("cannot compute grad on f64.") }
         }
     }
 }
@@ -85,9 +85,10 @@ pub struct f64ad_var {
     computation_graph: &'static ComputationGraph,
 }
 impl f64ad_var {
-    pub(crate) fn value(&self) -> f64 {
-        self.check_if_out_of_sync();
-        self.computation_graph.0.borrow().nodes[self.node_idx as usize].value
+    pub (crate) fn value(&self) -> f64 {
+        return unsafe {
+            (*self.computation_graph.0).nodes.read().unwrap()[self.node_idx as usize].value
+        }
     }
     pub(crate) fn new(computation_graph_id: usize, node_idx: u32, mode: ComputationGraphMode, computation_graph: &'static ComputationGraph) -> Self {
         Self {
@@ -105,62 +106,98 @@ impl f64ad_var {
         self.computation_graph.clone_to_global_computation_graph(name, idx);
     }
     fn forward_mode_grad(&self, add_to_computation_graph: bool) -> ForwardModeGradOutput {
-        self.check_if_out_of_sync();
-        let l = self.computation_graph.0.borrow().nodes.len();
-        let mut derivs = vec![f64ad::f64(0.0); l];
-        if add_to_computation_graph {
-            let v = self.computation_graph.spawn_f64ad_var(1.0);
-            derivs[self.node_idx as usize] = v;
-        } else {
-            derivs[self.node_idx as usize] = f64ad::f64(1.0);
-        }
+        unsafe {
+            let l = (*self.computation_graph.0).nodes.read().unwrap().len();
+            let mut derivs = vec![f64ad::f64(0.0); l];
+            if add_to_computation_graph {
+                let computation_graph = &mut (*self.computation_graph.0);
+                let v = computation_graph.spawn_f64ad_var(1.0);
+                derivs[self.node_idx as usize] = v;
+            } else {
+                derivs[self.node_idx as usize] = f64ad::f64(1.0);
+            }
 
-        let computation_graph = self.computation_graph;
-        for node_idx in 0..l {
-            let node = computation_graph.0.borrow().nodes[node_idx].clone();
-            let derivatives_of_value_wrt_parent_values = node.node_type.compute_derivatives_of_value_wrt_parent_values(&node.parent_nodes, &node.constant_operands, computation_graph, add_to_computation_graph);
-            for (i, d) in derivatives_of_value_wrt_parent_values.iter().enumerate() {
-                let parent_idx = node.parent_nodes[i];
-                let parent_deriv = derivs[parent_idx as usize];
-                derivs[node_idx] += parent_deriv * *d;
+            let computation_graph = &mut (*self.computation_graph.0);
+            for node_idx in 0..l {
+                let node = &computation_graph.nodes.read().unwrap()[node_idx].clone();
+                let node_type = node.node_type.clone();
+                let parent_nodes = node.parent_nodes.clone();
+                let constant_operands = node.constant_operands.clone();
+                let derivatives_of_value_wrt_parent_values = node_type.compute_derivatives_of_value_wrt_parent_values(&parent_nodes, &constant_operands, computation_graph, add_to_computation_graph);
+                for (i, d) in derivatives_of_value_wrt_parent_values.iter().enumerate() {
+                    let parent_idx = parent_nodes[i];
+                    let parent_deriv = derivs[parent_idx as usize];
+                    derivs[node_idx] += parent_deriv * *d;
+                }
             }
         }
 
         return ForwardModeGradOutput { derivs };
     }
     fn backwards_mode_grad(&self, add_to_computation_graph: bool) -> BackwardsModeGradOutput {
-        self.check_if_out_of_sync();
-        let l = self.computation_graph.0.borrow().nodes.len();
-        let mut derivs = vec![f64ad::f64(0.0); l];
-        if add_to_computation_graph {
-            let v = self.computation_graph.spawn_f64ad_var(1.0);
-            derivs[self.node_idx as usize] = v;
-        } else {
-            derivs[self.node_idx as usize] = f64ad::f64(1.0);
-        }
+        unsafe {
+            let l = (*self.computation_graph.0).nodes.read().unwrap().len();
+            let mut derivs = vec![f64ad::f64(0.0); l];
+            if add_to_computation_graph {
+                let computation_graph = &mut (*self.computation_graph.0);
+                let v = computation_graph.spawn_f64ad_var(1.0);
+                derivs[self.node_idx as usize] = v;
+            } else {
+                derivs[self.node_idx as usize] = f64ad::f64(1.0);
+            }
 
-        let computation_graph = self.computation_graph;
-        for node_idx in (0..l).rev() {
-            let curr_deriv = derivs[node_idx];
-            let node = computation_graph.0.borrow().nodes[node_idx].clone();
-            let derivatives_of_value_wrt_parent_values = node.node_type.compute_derivatives_of_value_wrt_parent_values(&node.parent_nodes, &node.constant_operands, computation_graph, add_to_computation_graph);
-            for (i, d) in derivatives_of_value_wrt_parent_values.iter().enumerate() {
-                let parent_idx = node.parent_nodes[i];
-                derivs[parent_idx as usize] += curr_deriv * *d;
+            let computation_graph = &mut (*self.computation_graph.0);
+            for node_idx in (0..l).rev() {
+                let curr_deriv = derivs[node_idx];
+                let node = &computation_graph.nodes.read().unwrap()[node_idx].clone();
+                let node_type = node.node_type.clone();
+                let parent_nodes = node.parent_nodes.clone();
+                let constant_operands = node.constant_operands.clone();
+                let derivatives_of_value_wrt_parent_values = node_type.compute_derivatives_of_value_wrt_parent_values(&parent_nodes, &constant_operands, computation_graph, add_to_computation_graph);
+                for (i, d) in derivatives_of_value_wrt_parent_values.iter().enumerate() {
+                    let parent_idx = parent_nodes[i];
+                    derivs[parent_idx as usize] += curr_deriv * *d;
+                }
             }
         }
 
         return BackwardsModeGradOutput { derivs }
     }
-    pub (crate) fn check_if_out_of_sync(&self) {
-        assert_eq!(self.computation_graph_id, self.computation_graph.0.borrow().id, "this variable is not in sync with its computation graph, the computation graph must have been reset.");
+    fn forward_mode_grad_with_computation_graph_clone(&self, add_to_computation_graph: bool, computation_graph_to_clone: &ComputationGraph) -> (ForwardModeGradOutput, ComputationGraph) {
+        assert_eq!(computation_graph_to_clone.id, self.computation_graph_id);
+        let mut computation_graph_clone = computation_graph_to_clone.clone();
+        let mut self_clone = self.clone();
+        self_clone.computation_graph_id = computation_graph_clone.id;
+        self_clone.computation_graph = ComputationGraphRawPointer(&mut computation_graph_clone as *mut ComputationGraph);
+
+        let res = self_clone.forward_mode_grad(add_to_computation_graph);
+        return (res, computation_graph_clone);
+    }
+    fn backwards_mode_grad_with_computation_graph_clone(&self, add_to_computation_graph: bool, computation_graph_to_clone: &ComputationGraph) -> (BackwardsModeGradOutput, ComputationGraph) {
+        assert_eq!(computation_graph_to_clone.id, self.computation_graph_id);
+        let mut computation_graph_clone = computation_graph_to_clone.clone();
+        let mut self_clone = self.clone();
+        self_clone.computation_graph_id = computation_graph_clone.id;
+        self_clone.computation_graph = ComputationGraphRawPointer(&mut computation_graph_clone as *mut ComputationGraph);
+
+        let res = self_clone.backwards_mode_grad(add_to_computation_graph);
+        println!(" >> {:?}", computation_graph_to_clone as *const ComputationGraph);
+
+        return (res, computation_graph_clone);
+    }
+    /// Dangerous function!  Only use this if you know EXACTLY what you are doing.
+    fn set_computation_graph_raw_pointer(&mut self, computation_graph: &mut ComputationGraph) {
+        self.computation_graph = ComputationGraphRawPointer(computation_graph as *mut ComputationGraph);
     }
 }
 impl Debug for f64ad_var {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         f.write_str("f64ad_var{ ").expect("error");
-        f.write_str(&format!("value: {:?}, ", self.value())).expect("error");
-        f.write_str(&format!("node_idx: {:?}", self.node_idx)).expect("error");
+        unsafe {
+            f.write_str(&format!("value: {:?}, ", (*self.computation_graph.0).nodes.read().unwrap()[self.node_idx as usize].value)).expect("error");
+        }
+        f.write_str(&format!("node_idx: {:?}, ", self.node_idx)).expect("error");
+        f.write_str(&format!("computation_graph_id: {:?}", self.computation_graph_id)).expect("error");
         f.write_str(" }").expect("error");
 
         Ok(())
@@ -175,6 +212,16 @@ impl ForwardModeGradOutput {
     pub fn wrt(&self, output: &f64ad) -> f64ad {
         return self.derivs[output.node_idx() as usize];
     }
+    pub fn set_computation_graph_raw_pointers(&mut self, computation_graph: &mut ComputationGraph) {
+        for d in &mut self.derivs {
+            match d {
+                f64ad::f64ad_var(v) => {
+                    v.set_computation_graph_raw_pointer(computation_graph);
+                }
+                _ => { }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -185,13 +232,92 @@ impl BackwardsModeGradOutput {
     pub fn wrt(&self, input: &f64ad) -> f64ad {
         return self.derivs[input.node_idx() as usize];
     }
+    pub fn set_computation_graph_raw_pointers(&mut self, computation_graph: &mut ComputationGraph) {
+        for d in &mut self.derivs {
+            match d {
+                f64ad::f64ad_var(v) => {
+                    v.set_computation_graph_raw_pointer(computation_graph);
+                }
+                _ => { }
+            }
+        }
+    }
 }
 
-#[derive(Clone, Debug)]
-pub struct ComputationGraph_ {
+#[allow(non_camel_case_types)]
+#[derive(Clone, Copy)]
+pub struct f64ad_locked_var {
+    locked_computation_graph_id: usize,
+    node_idx: u32,
+    locked_computation_graph: LockedComputationGraphRawPointer
+}
+impl f64ad_locked_var {
+    pub (crate) fn value(&self) -> f64 {
+        return unsafe {
+            (*self.locked_computation_graph.0).computation_graph.nodes.read().unwrap()[self.node_idx as usize].value
+        }
+    }
+}
+impl Debug for f64ad_locked_var {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("f64ad_locked_var{ ").expect("error");
+        unsafe {
+            f.write_str(&format!("value: {:?}, ", (*self.locked_computation_graph.0).computation_graph.nodes.read().unwrap()[self.node_idx as usize].value)).expect("error");
+        }
+        f.write_str(&format!("node_idx: {:?}", self.node_idx)).expect("error");
+        f.write_str(" }").expect("error");
+
+        Ok(())
+    }
+}
+
+pub (crate) fn f64ad_locked_var_operation_two_parents(lhs: &f64ad_locked_var, rhs: &f64ad_locked_var, node_type: NodeType) -> f64ad_locked_var {
+    assert_eq!(lhs.locked_computation_graph_id, rhs.locked_computation_graph_id);
+    unsafe {
+        let locked_computation_graph = &mut (*lhs.locked_computation_graph.0);
+        let node_idx = locked_computation_graph.curr_count as usize;
+        let computation_graph = &mut locked_computation_graph.computation_graph;
+        let node = &computation_graph.nodes.read().unwrap()[node_idx].clone();
+        assert_eq!(node.node_type, node_type);
+        let value = node.node_type.compute_value(&tiny_vec!([u32; 2] => lhs.node_idx, rhs.node_idx), &tiny_vec!([f64; 1]), computation_graph);
+        computation_graph.nodes.write().unwrap()[node_idx].value = value;
+        locked_computation_graph.curr_count += 1;
+        locked_computation_graph.push_forward_compute_start_idx += 1;
+        return f64ad_locked_var {
+            locked_computation_graph_id: lhs.locked_computation_graph_id,
+            node_idx: node_idx as u32,
+            locked_computation_graph: LockedComputationGraphRawPointer(locked_computation_graph as *mut LockedComputationGraph_)
+        };
+    }
+}
+pub (crate) fn f64ad_locked_var_operation_one_parent(v: &f64ad_locked_var, constant_operand: Option<f64>, node_type: NodeType) -> f64ad_locked_var {
+    unsafe {
+        let locked_computation_graph = &mut (*v.locked_computation_graph.0);
+        let node_idx = locked_computation_graph.curr_count as usize;
+        let computation_graph = &mut locked_computation_graph.computation_graph;
+        let node = &computation_graph.nodes.read().unwrap()[node_idx].clone();
+        assert_eq!(node.node_type, node_type);
+        let value = match constant_operand {
+            None => { node.node_type.compute_value(&tiny_vec!([u32; 2] => v.node_idx), &tiny_vec!([f64; 1]), computation_graph) }
+            Some(constant_operand) => { node.node_type.compute_value(&tiny_vec!([u32; 2] => v.node_idx), &tiny_vec!([f64; 1] => constant_operand), computation_graph) }
+        };
+        computation_graph.nodes.write().unwrap()[node_idx].value = value;
+        locked_computation_graph.curr_count += 1;
+        locked_computation_graph.push_forward_compute_start_idx += 1;
+        return f64ad_locked_var {
+            locked_computation_graph_id: v.locked_computation_graph_id,
+            node_idx: node_idx as u32,
+            locked_computation_graph: LockedComputationGraphRawPointer(locked_computation_graph as *mut LockedComputationGraph_)
+        };
+    }
+}
+
+#[derive(Debug)]
+pub struct ComputationGraph {
     id: usize,
-    nodes: Vec<F64ADNode>,
-    mode: ComputationGraphMode,
+    name: String,
+    nodes: RwLock<Vec<F64ADNode>>,
+    mode: ComputationGraphMode
 }
 impl ComputationGraph_ {
     fn new(mode: ComputationGraphMode) -> Self {
@@ -199,14 +325,21 @@ impl ComputationGraph_ {
         let id: usize = rng.gen();
         Self {
             id,
-            nodes: Vec::with_capacity(1_000_000),
-            mode,
+            name: match name {
+                None => { "".to_string() }
+                Some(name) => { name.to_string() }
+            },
+            nodes: RwLock::new(Vec::with_capacity(1_000_000)),
+            mode
         }
     }
     pub fn reset(&mut self, mode: ComputationGraphMode) {
         *self = Self::new(mode);
     }
-}
+    pub fn spawn_f64ad_var(&mut self, value: f64) -> f64ad {
+        let nodes = self.nodes.write().unwrap();
+        let node_idx = nodes.len();
+        drop(nodes);
 
 #[derive(Debug)]
 pub struct ComputationGraph(RefCell<ComputationGraph_>);
@@ -250,7 +383,8 @@ impl ComputationGraph {
             child_nodes: tiny_vec!([u32; 5]),
         };
 
-        self.0.borrow_mut().nodes.push(n);
+        let mut nodes = self.nodes.write().unwrap();
+        nodes.push(n);
 
         return f64ad::f64ad_var(f);
     }
@@ -258,15 +392,51 @@ impl ComputationGraph {
         let computation_graph = self.clone();
         GlobalComputationGraphs::set(name, idx, computation_graph);
     }
-    fn lock(&self) -> LockedComputationGraph {
-        return LockedComputationGraph::new(self.clone());
+    pub fn id(&self) -> usize {
+        self.id
+    }
+    pub fn name(&self) -> &String {
+        &self.name
+    }
+    fn add_node(&mut self, node_type: NodeType, parent_nodes: TinyVec<[u32; 2]>, constant_operands: TinyVec<[f64; 1]>) -> f64ad_var {
+        let value = node_type.compute_value(&parent_nodes, &constant_operands, self);
+        let mut nodes_for_writing = self.nodes.write().unwrap();
+        let node_idx = nodes_for_writing.len() as u32;
+        for parent_node in &parent_nodes { nodes_for_writing[*parent_node as usize].child_nodes.push(node_idx); }
+        let node = F64ADNode::new(node_idx, value, node_type, constant_operands, parent_nodes);
+        nodes_for_writing.push(node);
+        drop(nodes_for_writing);
+
+        f64ad_var {
+            computation_graph_id: self.id,
+            node_idx,
+            mode: self.mode.clone(),
+            computation_graph: ComputationGraphRawPointer(self as *mut ComputationGraph)
+        }
     }
 }
 impl Clone for ComputationGraph {
     fn clone(&self) -> Self {
-        let computation_graph = self.0.borrow().clone();
-        Self(RefCell::new(computation_graph))
+        let mut rng = rand::thread_rng();
+        let id: usize = rng.gen();
+        Self {
+            id,
+            name: self.name.clone(),
+            nodes: RwLock::new(self.nodes.read().unwrap().clone()),
+            mode: self.mode.clone()
+        }
     }
+}
+
+#[derive(Clone, Debug, Copy)]
+pub struct ComputationGraphRawPointer(*mut ComputationGraph);
+unsafe impl Sync for ComputationGraphRawPointer { }
+unsafe impl Send for ComputationGraphRawPointer { }
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ComputationGraphMode {
+    Standard,
+    Lock
 }
 
 #[derive(Clone)]
@@ -275,16 +445,40 @@ impl GlobalComputationGraph {
     fn reset(&self, mode: ComputationGraphMode) {
         unsafe { (*self.0).reset(mode) }
     }
-    pub fn spawn_f64ad_var(&self, value: f64) -> f64ad {
-        return unsafe { (*self.0).spawn_f64ad_var(value) }
+    pub fn set_value(&mut self, node_idx: usize, value: f64) {
+        let node = &mut self.locked_computation_graph.computation_graph.nodes.write().unwrap()[node_idx];
+        assert_eq!(node.parent_nodes.len(), 0, "cannot set value of a non-initial node.");
+        node.value = value;
+        self.locked_computation_graph.push_forward_compute_start_idx = node_idx;
     }
-    fn lock(&self) -> LockedComputationGraph {
-        return unsafe { (*self.0).lock() }
+    pub fn get_value(&self, idx: usize) -> f64 {
+        return self.locked_computation_graph.computation_graph.nodes.read().unwrap()[idx].value
     }
 }
 impl Debug for GlobalComputationGraph {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         unsafe { (*self.0).fmt(f) }
+    }
+    pub fn template_output(&self) -> &T {
+        &self.template_output
+    }
+    pub fn push_forward_compute(&mut self) {
+        let l = self.locked_computation_graph.computation_graph.nodes.read().unwrap().len();
+        let start_idx = self.locked_computation_graph.push_forward_compute_start_idx;
+        for idx in start_idx..l {
+            let node = &self.locked_computation_graph.computation_graph.nodes.read().unwrap()[idx];
+            match node.node_type {
+                NodeType::None => {  }
+                NodeType::InputVar => {  }
+                _ => {
+                    let value = node.node_type.compute_value(&node.parent_nodes, &node.constant_operands, &self.locked_computation_graph.computation_graph);
+                    self.locked_computation_graph.computation_graph.nodes.write().unwrap()[idx].value = value;
+                }
+            }
+        }
+    }
+    pub fn name(&self) -> &String {
+        &self.name
     }
 }
 
@@ -372,192 +566,192 @@ impl NodeType {
             NodeType::None => { panic!("Cannot compute value on node type None.") }
             NodeType::InputVar => { panic!("Cannot compute value on node type InputVar.") }
             NodeType::AdditionOneParent => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value + constant_operands[0];
             }
             NodeType::AdditionTwoParents => {
-                let parent_value_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
-                let parent_value_1 = computation_graph.0.borrow().nodes[parent_nodes[1] as usize].value;
+                let parent_value_0 = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
+                let parent_value_1 = computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize].value;
                 return parent_value_0 + parent_value_1;
             }
             NodeType::MultiplicationOneParent => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value * constant_operands[0];
             }
             NodeType::MultiplicationTwoParents => {
-                let parent_value_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
-                let parent_value_1 = computation_graph.0.borrow().nodes[parent_nodes[1] as usize].value;
+                let parent_value_0 = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
+                let parent_value_1 = computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize].value;
                 return parent_value_0 * parent_value_1;
             }
             NodeType::SubtractionOneParentLeft => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value - constant_operands[0];
             }
             NodeType::SubtractionOneParentRight => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return constant_operands[0] - parent_value;
             }
             NodeType::SubtractionTwoParents => {
-                let parent_value_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
-                let parent_value_1 = computation_graph.0.borrow().nodes[parent_nodes[1] as usize].value;
+                let parent_value_0 = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
+                let parent_value_1 = computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize].value;
                 return parent_value_0 - parent_value_1;
             }
             NodeType::DivisionOneParentDenominator => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return constant_operands[0] / parent_value;
             }
             NodeType::DivisionOneParentNumerator => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value / constant_operands[0];
             }
             NodeType::DivisionTwoParents => {
-                let parent_value_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
-                let parent_value_1 = computation_graph.0.borrow().nodes[parent_nodes[1] as usize].value;
+                let parent_value_0 = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
+                let parent_value_1 = computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize].value;
                 return parent_value_0 / parent_value_1;
             }
             NodeType::Neg => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return -parent_value;
             }
             NodeType::Abs => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.abs();
             }
             NodeType::Signum => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.signum();
             }
             NodeType::MaxOneParent => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.max(constant_operands[0]);
             }
             NodeType::MaxTwoParents => {
-                let parent_value_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
-                let parent_value_1 = computation_graph.0.borrow().nodes[parent_nodes[1] as usize].value;
+                let parent_value_0 = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
+                let parent_value_1 = computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize].value;
                 return parent_value_0.max(parent_value_1);
             }
             NodeType::MinOneParent => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.min(constant_operands[0]);
             }
             NodeType::MinTwoParents => {
-                let parent_value_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
-                let parent_value_1 = computation_graph.0.borrow().nodes[parent_nodes[1] as usize].value;
+                let parent_value_0 = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
+                let parent_value_1 = computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize].value;
                 return parent_value_0.min(parent_value_1);
             }
             NodeType::Atan2OneParentLeft => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.atan2(constant_operands[0]);
             }
             NodeType::Atan2OneParentRight => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return constant_operands[0].atan2(parent_value);
             }
             NodeType::Atan2TwoParents => {
-                let parent_value_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
-                let parent_value_1 = computation_graph.0.borrow().nodes[parent_nodes[1] as usize].value;
+                let parent_value_0 = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
+                let parent_value_1 = computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize].value;
                 return parent_value_0.atan2(parent_value_1);
             }
             NodeType::Floor => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.floor();
             }
             NodeType::Ceil => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.ceil();
             }
             NodeType::Round => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.round();
             }
             NodeType::Trunc => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.trunc();
             }
             NodeType::Fract => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.fract();
             }
             NodeType::Sin => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.sin();
             }
             NodeType::Cos => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.cos();
             }
             NodeType::Tan => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.tan();
             }
             NodeType::Asin => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.asin();
             }
             NodeType::Acos => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.acos();
             }
             NodeType::Atan => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.atan();
             }
             NodeType::Sinh => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.sinh();
             }
             NodeType::Cosh => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.cosh();
             }
             NodeType::Tanh => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.tanh();
             }
             NodeType::Asinh => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.asinh();
             }
             NodeType::Acosh => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.acosh();
             }
             NodeType::Atanh => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.atanh();
             }
             NodeType::LogOneParentArgument => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.log(constant_operands[0]);
             }
             NodeType::LogOneParentBase => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return constant_operands[0].log(parent_value);
             }
             NodeType::LogTwoParents => {
-                let parent_value_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
-                let parent_value_1 = computation_graph.0.borrow().nodes[parent_nodes[1] as usize].value;
+                let parent_value_0 = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
+                let parent_value_1 = computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize].value;
                 return parent_value_0.log(parent_value_1);
             }
             NodeType::Sqrt => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.sqrt();
             }
             NodeType::Exp => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.exp();
             }
             NodeType::PowOneParentArgument => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return parent_value.powf(constant_operands[0]);
             }
             NodeType::PowOneParentExponent => {
-                let parent_value = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                let parent_value = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
                 return constant_operands[0].powf(parent_value);
             }
             NodeType::PowTwoParents => {
-                let parent_value_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
-                let parent_value_1 = computation_graph.0.borrow().nodes[parent_nodes[1] as usize].value;
+                let parent_value_0 = computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].value;
+                let parent_value_1 = computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize].value;
                 return parent_value_0.powf(parent_value_1);
             }
         }
@@ -571,18 +765,18 @@ impl NodeType {
             NodeType::MultiplicationOneParent => { return tiny_vec!([f64ad; 2] => f64ad::f64(constant_operands[0])); }
             NodeType::MultiplicationTwoParents => {
                 return if add_to_computation_graph {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
-                    let parent_node_1 = &computation_graph.0.borrow().nodes[parent_nodes[1] as usize];
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let parent_node_1 = &computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
                     let node_idx_0 = parent_node_0.node_idx;
                     let node_idx_1 = parent_node_1.node_idx;
                     let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_1, mode, computation_graph));
                     let f1 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
                     tiny_vec!([f64ad; 2] => f0, f1)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
-                    let parent_node_1 = &computation_graph.0.borrow().nodes[parent_nodes[1] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
+                    let parent_node_1 = &computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize];
                     tiny_vec!([f64ad; 2] => f64ad::f64(parent_node_1.value), f64ad::f64(parent_node_0.value))
                 };
             }
@@ -591,14 +785,15 @@ impl NodeType {
             NodeType::SubtractionTwoParents => { return tiny_vec!([f64ad; 2] => f64ad::f64(1.0), f64ad::f64(-1.0)); }
             NodeType::DivisionOneParentDenominator => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
                     let ret = -(constant_operands[0] / (f0 * f0));
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(-(constant_operands[0] / (v * v))))
                 };
@@ -608,22 +803,24 @@ impl NodeType {
             }
             NodeType::DivisionTwoParents => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let node_idx_1 = computation_graph.0.borrow().nodes[parent_nodes[1] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
-                    let f1 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_1, mode, computation_graph));
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let parent_node_1 = &computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let node_idx_1 = parent_node_1.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let f1 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_1, mode, computation_graph as *mut ComputationGraph));
                     tiny_vec!([f64ad; 2] => 1.0/f1, -f0/(f1*f1))
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
-                    let parent_node_1 = &computation_graph.0.borrow().nodes[parent_nodes[1] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
+                    let parent_node_1 = &computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize];
                     tiny_vec!([f64ad; 2] => f64ad::f64(1.0/parent_node_1.value), f64ad::f64(-parent_node_0.value/(parent_node_1.value * parent_node_1.value)))
                 };
             }
             NodeType::Neg => { return tiny_vec!([f64ad; 2] => f64ad::f64(-1.0)); }
             NodeType::Abs => {
-                let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                 let v = parent_node_0.value;
                 if v >= 0.0 {
                     tiny_vec!([f64ad; 2] => f64ad::f64(1.0))
@@ -635,69 +832,73 @@ impl NodeType {
                 return tiny_vec!([f64ad; 2] => f64ad::f64(0.0));
             }
             NodeType::MaxOneParent => {
-                let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                 let v = parent_node_0.value;
                 return if v >= constant_operands[0] { tiny_vec!([f64ad; 2] => f64ad::f64(1.0)) } else { tiny_vec!([f64ad; 2] => f64ad::f64(0.0)) };
             }
             NodeType::MaxTwoParents => {
-                let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
-                let parent_node_1 = &computation_graph.0.borrow().nodes[parent_nodes[1] as usize];
+                let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
+                let parent_node_1 = &computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize];
                 let v0 = parent_node_0.value;
                 let v1 = parent_node_1.value;
                 return if v0 >= v1 { tiny_vec!([f64ad; 2] => f64ad::f64(1.0), f64ad::f64(0.0)) } else { tiny_vec!([f64ad; 2] => f64ad::f64(0.0), f64ad::f64(1.0)) };
             }
             NodeType::MinOneParent => {
-                let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                 let v = parent_node_0.value;
                 return if v <= constant_operands[0] { tiny_vec!([f64ad; 2] => f64ad::f64(1.0)) } else { tiny_vec!([f64ad; 2] => f64ad::f64(0.0)) };
             }
             NodeType::MinTwoParents => {
-                let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
-                let parent_node_1 = &computation_graph.0.borrow().nodes[parent_nodes[1] as usize];
+                let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
+                let parent_node_1 = &computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize];
                 let v0 = parent_node_0.value;
                 let v1 = parent_node_1.value;
                 return if v0 <= v1 { tiny_vec!([f64ad; 2] => f64ad::f64(1.0), f64ad::f64(0.0)) } else { tiny_vec!([f64ad; 2] => f64ad::f64(0.0), f64ad::f64(1.0)) };
             }
             NodeType::Atan2OneParentLeft => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
-                    let ret = constant_operands[0] / (constant_operands[0].powi(2) + (f0 * f0));
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = constant_operands[0]/ (constant_operands[0].powi(2) + (f0 * f0));
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(constant_operands[0]/ (constant_operands[0].powi(2) + v.powi(2))))
                 };
             }
             NodeType::Atan2OneParentRight => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
-                    let ret = -constant_operands[0] / (constant_operands[0].powi(2) + (f0 * f0));
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = -constant_operands[0]/ (constant_operands[0].powi(2) + (f0 * f0));
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(-constant_operands[0]/ (constant_operands[0].powi(2) + v.powi(2))))
                 };
             }
             NodeType::Atan2TwoParents => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let node_idx_1 = computation_graph.0.borrow().nodes[parent_nodes[1] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
-                    let f1 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_1, mode, computation_graph));
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let parent_node_1 = &computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let node_idx_1 = parent_node_1.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let f1 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_1, mode, computation_graph as *mut ComputationGraph));
                     tiny_vec!([f64ad; 2] => f1/(f0*f0 + f1*f1), -f0/(f0*f0 + f1*f1))
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
-                    let parent_node_1 = &computation_graph.0.borrow().nodes[parent_nodes[1] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
+                    let parent_node_1 = &computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize];
                     let v0 = parent_node_0.value;
                     let v1 = parent_node_1.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(-v0/(v0*v0 + v1*v1)))
@@ -710,42 +911,46 @@ impl NodeType {
             NodeType::Fract => { return tiny_vec!([f64ad; 2] => f64ad::f64(0.0)); }
             NodeType::Sin => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
                     let ret = f0.cos();
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let v = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].value;
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
+                    let v = parent_node_0.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(v.cos()))
                 };
             }
             NodeType::Cos => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
                     let ret = -f0.sin();
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(-v.sin()))
                 };
             }
             NodeType::Tan => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
                     let c = f0.cos();
                     let ret = 1.0 / (c * c);
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     let c = v.cos();
                     tiny_vec!([f64ad; 2] => f64ad::f64(1.0/(c*c)))
@@ -753,158 +958,169 @@ impl NodeType {
             }
             NodeType::Asin => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
-                    let ret = 1.0 / (1.0 - f0 * f0).sqrt();
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = 1.0/(1.0 - f0*f0).sqrt();
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(1.0/(1.0 - v*v).sqrt()))
                 };
             }
             NodeType::Acos => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
-                    let ret = -1.0 / (1.0 - f0 * f0).sqrt();
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = -1.0/(1.0 - f0*f0).sqrt();
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(-1.0/(1.0 - v*v).sqrt()))
                 };
             }
             NodeType::Atan => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
-                    let ret = 1.0 / (f0 * f0 + 1.0);
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = 1.0/(f0*f0 + 1.0);
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(1.0/(v*v + 1.0)))
                 };
             }
             NodeType::Sinh => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
                     let ret = f0.cosh();
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(v.cosh()))
                 };
             }
             NodeType::Cosh => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
                     let ret = f0.sinh();
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(v.sinh()))
                 };
             }
             NodeType::Tanh => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
                     let c = f0.cosh();
                     let ret = 1.0 / (c * c);
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(1.0/v.cosh().powi(2)))
                 };
             }
             NodeType::Asinh => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
-                    let ret = 1.0 / (f0 * f0 + 1.0).sqrt();
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = 1.0 / (f0*f0 + 1.0).sqrt();
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(1.0 / (v*v + 1.0).sqrt()))
                 };
             }
             NodeType::Acosh => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
-                    let ret = 1.0 / ((f0 - 1.0).sqrt() * (f0 + 1.0).sqrt());
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = 1.0 / ((f0 - 1.0).sqrt()*(f0 + 1.0).sqrt());
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(1.0 / ((v - 1.0).sqrt()*(v + 1.0).sqrt())))
                 };
             }
             NodeType::Atanh => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
-                    let ret = 1.0 / (1.0 - f0 * f0);
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = 1.0 / (1.0 - f0*f0);
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(1.0 / (1.0 - v*v)))
                 };
             }
             NodeType::LogOneParentArgument => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
-                    let ret = 1.0 / (f0 * constant_operands[0].ln());
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = 1.0 / (f0*constant_operands[0].ln());
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(1.0 / (v*constant_operands[0].ln())))
                 };
             }
             NodeType::LogOneParentBase => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
                     let ly = constant_operands[0].ln();
                     let lx = f0.ln();
                     println!(" >> {:?}", lx);
                     let ret = -ly / (f0 * (lx * lx));
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     let ly = constant_operands[0].ln();
                     let lx = v.ln();
@@ -914,19 +1130,21 @@ impl NodeType {
             }
             NodeType::LogTwoParents => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let node_idx_1 = computation_graph.0.borrow().nodes[parent_nodes[1] as usize].node_idx;
-                    let argument = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
-                    let base = f64ad::f64ad_var(f64ad_var::new(id, node_idx_1, mode, computation_graph));
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let parent_node_1 = &computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let node_idx_1 = parent_node_1.node_idx;
+                    let argument = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let base = f64ad::f64ad_var(f64ad_var::new(id, node_idx_1, mode, computation_graph as *mut ComputationGraph));
                     let ret0 = 1.0 / (argument * base.ln());
                     let lb = base.ln();
                     let ret1 = -argument.ln() / (base * (lb * lb));
                     tiny_vec!([f64ad; 2] => ret0, ret1)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
-                    let parent_node_1 = &computation_graph.0.borrow().nodes[parent_nodes[1] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
+                    let parent_node_1 = &computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize];
                     let argument = parent_node_0.value;
                     let base = parent_node_1.value;
                     let ret0 = 1.0 / (argument * base.ln());
@@ -937,57 +1155,61 @@ impl NodeType {
             }
             NodeType::Sqrt => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
-                    let ret = 1.0 / (2.0 * f0.sqrt());
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let ret = 1.0/(2.0*f0.sqrt());
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(1.0/(2.0*v.sqrt())))
                 };
             }
             NodeType::Exp => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
                     let ret = f0.exp();
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(v.exp()))
                 };
             }
             NodeType::PowOneParentArgument => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
                     let ret = constant_operands[0] * f0.powf(f64ad::f64(constant_operands[0] - 1.0));
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     tiny_vec!([f64ad; 2] => f64ad::f64(constant_operands[0] * v.powf(constant_operands[0] - 1.0)))
                 };
             }
             NodeType::PowOneParentExponent => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let f0 = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
                     let c = constant_operands[0];
                     let ret = f64ad::f64(c).powf(f0) * c.ln();
                     tiny_vec!([f64ad; 2] => ret)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
                     let v = parent_node_0.value;
                     let c = constant_operands[0];
                     tiny_vec!([f64ad; 2] => f64ad::f64(c.powf(v) * c.ln()))
@@ -995,18 +1217,20 @@ impl NodeType {
             }
             NodeType::PowTwoParents => {
                 return if add_to_computation_graph {
-                    let id = computation_graph.0.borrow().id;
-                    let mode = computation_graph.0.borrow().mode.clone();
-                    let node_idx_0 = computation_graph.0.borrow().nodes[parent_nodes[0] as usize].node_idx;
-                    let node_idx_1 = computation_graph.0.borrow().nodes[parent_nodes[1] as usize].node_idx;
-                    let argument = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph));
-                    let exponent = f64ad::f64ad_var(f64ad_var::new(id, node_idx_1, mode, computation_graph));
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize].clone();
+                    let parent_node_1 = &computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize].clone();
+                    let id = computation_graph.id;
+                    let mode = computation_graph.mode.clone();
+                    let node_idx_0 = parent_node_0.node_idx;
+                    let node_idx_1 = parent_node_1.node_idx;
+                    let argument = f64ad::f64ad_var(f64ad_var::new(id, node_idx_0, mode, computation_graph as *mut ComputationGraph));
+                    let exponent = f64ad::f64ad_var(f64ad_var::new(id, node_idx_1, mode, computation_graph as *mut ComputationGraph));
                     let ret0 = exponent * argument.powf(exponent - 1.0);
                     let ret1 = argument.powf(exponent) * argument.ln();
                     tiny_vec!([f64ad; 2] => ret0, ret1)
                 } else {
-                    let parent_node_0 = &computation_graph.0.borrow().nodes[parent_nodes[0] as usize];
-                    let parent_node_1 = &computation_graph.0.borrow().nodes[parent_nodes[1] as usize];
+                    let parent_node_0 = &computation_graph.nodes.read().unwrap()[parent_nodes[0] as usize];
+                    let parent_node_1 = &computation_graph.nodes.read().unwrap()[parent_nodes[1] as usize];
                     let argument = parent_node_0.value;
                     let exponent = parent_node_1.value;
                     let ret0 = exponent * argument.powf(exponent - 1.0);
@@ -1344,7 +1568,111 @@ fn f64ad_jacobian_internal_nonparallel(inputs: &[f64ad], outputs: &JacobianOutpu
     out
 }
 
-/*
+/// The parallel option is still a bit buggy and slow, probably stay away from it for now.
+pub fn f64ad_jacobian(inputs: &[f64ad], outputs: &[f64ad], order: usize, parallel: bool) -> JacobianOutput {
+    let mut out = JacobianOutput::new();
+    for (output_idx, output) in outputs.iter().enumerate() {
+        out.push_entry(vec![], output_idx, output.clone());
+    }
+
+    let mut curr_order = 0;
+    while curr_order < order {
+        let add_to_computation_graph = !(curr_order == order - 1);
+        out = f64ad_jacobian_internal(inputs, &out, parallel, add_to_computation_graph);
+        curr_order += 1;
+    }
+
+    out.sort();
+    out
+}
+
+fn f64ad_jacobian_internal(inputs: &[f64ad], outputs: &JacobianOutput, parallel: bool, add_to_computation_graph: bool) -> JacobianOutput {
+    return if parallel && !add_to_computation_graph { f64ad_jacobian_internal_parallel(inputs, outputs, add_to_computation_graph) }
+    else { f64ad_jacobian_internal_nonparallel(inputs, outputs, add_to_computation_graph) }
+}
+
+fn f64ad_jacobian_internal_nonparallel(inputs: &[f64ad], outputs: &JacobianOutput, add_to_computation_graph: bool) -> JacobianOutput {
+    let mut out = JacobianOutput::new();
+
+    let num_inputs = inputs.len();
+    let num_outputs = outputs.entries.len();
+
+    // forward mode
+    if num_inputs <= num_outputs {
+        for (input_idx, input) in inputs.iter().enumerate() {
+            match input {
+                f64ad::f64ad_var(_) => {
+                    let grad = input.forward_mode_grad(add_to_computation_graph);
+
+                    for output in outputs.entries.iter() {
+                        let mut new_jacobian_entry_signature = output.signature.clone();
+                        new_jacobian_entry_signature.inputs_wrt.push(input_idx);
+                        match &output.value {
+                            f64ad::f64ad_var(_) => {
+                                let new_value = grad.wrt(&output.value);
+                                let new_jacobian_entry = JacobianEntry {
+                                    signature: new_jacobian_entry_signature,
+                                    value: new_value,
+                                };
+                                out.entries.push(new_jacobian_entry);
+                            }
+                            _ => {
+                                let new_value = f64ad::f64(0.0);
+                                let new_jacobian_entry = JacobianEntry {
+                                    signature: new_jacobian_entry_signature,
+                                    value: new_value
+                                };
+                                out.entries.push(new_jacobian_entry);
+                            }
+                        }
+                    }
+                }
+                _ => { }
+            }
+        }
+    }
+    // backwards mode
+    else {
+        for output in outputs.entries.iter() {
+            match &output.value {
+                f64ad::f64ad_var(_) => {
+                    let grad = output.value.backwards_mode_grad(add_to_computation_graph);
+
+                    for (input_idx, input) in inputs.iter().enumerate() {
+                        match input {
+                            f64ad::f64ad_var(_) => {
+                                let mut new_jacobian_entry_signature = output.signature.clone();
+                                new_jacobian_entry_signature.inputs_wrt.push(input_idx);
+                                let new_value = grad.wrt(input);
+                                let new_jacobian_entry = JacobianEntry {
+                                    signature: new_jacobian_entry_signature,
+                                    value: new_value,
+                                };
+                                out.entries.push(new_jacobian_entry);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {
+                    for (input_idx, _) in inputs.iter().enumerate() {
+                        let mut new_jacobian_entry_signature = output.signature.clone();
+                        new_jacobian_entry_signature.inputs_wrt.push(input_idx);
+                        let new_value = f64ad::f64(0.0);
+                        let new_jacobian_entry = JacobianEntry {
+                            signature: new_jacobian_entry_signature,
+                            value: new_value,
+                        };
+                        out.entries.push(new_jacobian_entry);
+                    }
+                }
+            }
+        }
+    }
+
+    out
+}
+
 fn f64ad_jacobian_internal_parallel(inputs: &[f64ad], outputs: &JacobianOutput, add_to_computation_graph: bool) -> JacobianOutput {
     let out = JacobianOutput::new();
     let out_mutex = Mutex::new(out);
@@ -1431,12 +1759,11 @@ fn f64ad_jacobian_internal_parallel(inputs: &[f64ad], outputs: &JacobianOutput, 
 
     out_mutex.into_inner().unwrap()
 }
-*/
 
 #[derive(Clone, Debug)]
 pub struct JacobianOutput {
     entries: Vec<JacobianEntry>
-}
+} 
 impl JacobianOutput {
     pub fn new() -> Self {
         Self {
@@ -1445,7 +1772,10 @@ impl JacobianOutput {
     }
     fn push_entry(&mut self, inputs_wrt: Vec<usize>, output: usize, value: f64ad) {
         let entry_to_add = JacobianEntry {
-            signature: JacobianEntrySignature::new(output, inputs_wrt),
+            signature: JacobianEntrySignature {
+                inputs_wrt,
+                output
+            },
             value
         };
         self.entries.push(entry_to_add);
@@ -1454,7 +1784,10 @@ impl JacobianOutput {
         self.entries.sort_by(|x, y| x.signature.partial_cmp(&y.signature).unwrap() );
     }
     pub fn get_entry(&self, inputs_wrt: Vec<usize>, output: usize) -> Option<&JacobianEntry> {
-        let signature = JacobianEntrySignature::new(output, inputs_wrt);
+        let signature = JacobianEntrySignature {
+            inputs_wrt,
+            output
+        };
         let binary_search_res = self.entries.binary_search_by(|x| x.signature.partial_cmp(&signature).unwrap() );
         return match binary_search_res {
             Ok(i) => { Some(&self.entries[i]) }
@@ -1485,18 +1818,9 @@ impl JacobianEntry {
 #[derive(Clone, Debug, PartialOrd, PartialEq)]
 pub struct JacobianEntrySignature {
     output: usize,
-    inputs_wrt: Vec<usize>
+    inputs_wrt: Vec<usize>,
 }
 impl JacobianEntrySignature {
-    pub fn new(output: usize, inputs_wrt: Vec<usize>) -> Self {
-        Self {
-            output,
-            inputs_wrt,
-        }
-    }
-    pub fn add_input_wrt(&mut self, input_wrt: usize) {
-        self.inputs_wrt.push(input_wrt);
-    }
     pub fn inputs_wrt(&self) -> &Vec<usize> {
         &self.inputs_wrt
     }
