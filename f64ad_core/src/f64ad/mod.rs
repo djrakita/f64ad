@@ -11,7 +11,7 @@ use std::sync::{Mutex};
 use tinyvec::{tiny_vec, TinyVec};
 use rand::prelude::*;
 use once_cell::sync::OnceCell;
-use simba::scalar::ComplexField;
+use simba::scalar::{ComplexField, RealField};
 
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone, Copy)]
@@ -75,6 +75,12 @@ impl Default for f64ad {
 }
 unsafe impl Sync for f64ad {}
 unsafe impl Send for f64ad {}
+
+#[allow(non_camel_case_types)]
+pub trait f64ad_trait:
+    RealField +
+    ComplexField
+{ }
 
 #[allow(non_camel_case_types)]
 #[derive(Clone, Copy)]
