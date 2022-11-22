@@ -1,5 +1,6 @@
 use num_traits::{Signed, Zero};
-use simba::scalar::{ComplexField, Field, RealField, SubsetOf, SupersetOf};
+use simba::scalar::{ComplexField, Field, RealField, SubsetOf};
+use simba::simd::PrimitiveSimdValue;
 use tinyvec::tiny_vec;
 use crate::f64ad::{ComputationGraphMode, f64ad, f64ad_locked_var_operation_one_parent, f64ad_locked_var_operation_two_parents, NodeType};
 
@@ -593,18 +594,118 @@ impl SubsetOf<f64ad> for f64ad {
     }
 }
 
-impl SupersetOf<f64> for f64ad {
-    fn is_in_subset(&self) -> bool {
-        true
+impl Field for f64ad { }
+
+impl PrimitiveSimdValue for f64ad { }
+
+impl SubsetOf<f64ad> for f32 {
+    fn to_superset(&self) -> f64ad {
+        f64ad::f64(*self as f64)
     }
 
-    fn to_subset_unchecked(&self) -> f64 {
-        self.value()
+    fn from_superset_unchecked(element: &f64ad) -> Self {
+        element.value() as f32
     }
 
-    fn from_subset(element: &f64) -> Self {
-        f64ad::f64(element.clone())
+    fn is_in_subset(_: &f64ad) -> bool {
+        false
     }
 }
 
-impl Field for f64ad { }
+impl SubsetOf<f64ad> for f64 {
+    fn to_superset(&self) -> f64ad {
+        f64ad::f64(*self as f64)
+    }
+
+    fn from_superset_unchecked(element: &f64ad) -> Self {
+        element.value()
+    }
+
+    fn is_in_subset(_: &f64ad) -> bool {
+        false
+    }
+}
+
+impl SubsetOf<f64ad> for u32 {
+    fn to_superset(&self) -> f64ad {
+        f64ad::f64(*self as f64)
+    }
+
+    fn from_superset_unchecked(element: &f64ad) -> Self {
+        element.value() as u32
+    }
+
+    fn is_in_subset(_: &f64ad) -> bool {
+        false
+    }
+}
+
+impl SubsetOf<f64ad> for u64 {
+    fn to_superset(&self) -> f64ad {
+        f64ad::f64(*self as f64)
+    }
+
+    fn from_superset_unchecked(element: &f64ad) -> Self {
+        element.value() as u64
+    }
+
+    fn is_in_subset(_: &f64ad) -> bool {
+        false
+    }
+}
+
+impl SubsetOf<f64ad> for u128 {
+    fn to_superset(&self) -> f64ad {
+        f64ad::f64(*self as f64)
+    }
+
+    fn from_superset_unchecked(element: &f64ad) -> Self {
+        element.value() as u128
+    }
+
+    fn is_in_subset(_: &f64ad) -> bool {
+        false
+    }
+}
+
+impl SubsetOf<f64ad> for i32 {
+    fn to_superset(&self) -> f64ad {
+        f64ad::f64(*self as f64)
+    }
+
+    fn from_superset_unchecked(element: &f64ad) -> Self {
+        element.value() as i32
+    }
+
+    fn is_in_subset(_: &f64ad) -> bool {
+        false
+    }
+}
+
+impl SubsetOf<f64ad> for i64 {
+    fn to_superset(&self) -> f64ad {
+        f64ad::f64(*self as f64)
+    }
+
+    fn from_superset_unchecked(element: &f64ad) -> Self {
+        element.value() as i64
+    }
+
+    fn is_in_subset(_: &f64ad) -> bool {
+        false
+    }
+}
+
+impl SubsetOf<f64ad> for i128 {
+    fn to_superset(&self) -> f64ad {
+        f64ad::f64(*self as f64)
+    }
+
+    fn from_superset_unchecked(element: &f64ad) -> Self {
+        element.value() as i128
+    }
+
+    fn is_in_subset(_: &f64ad) -> bool {
+        false
+    }
+}

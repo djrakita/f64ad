@@ -67,6 +67,16 @@ impl f64ad {
             _ => { panic!("cannot clone computation graph of an f64ad that is not an f64ad_var.") }
         }
     }
+
+    pub fn to_bits(&self) -> u64 {
+        self.value().to_bits()
+    }
+    pub fn from_bits(v: u64) -> Self {
+        f64ad::f64(f64::from_bits(v))
+    }
+    pub const MAX: Self = f64ad::f64(f64::MAX);
+    pub const MIN: Self = f64ad::f64(f64::MIN);
+    pub const EPSILON: Self = f64ad::f64(f64::EPSILON);
 }
 impl Default for f64ad {
     fn default() -> Self {
@@ -75,6 +85,13 @@ impl Default for f64ad {
 }
 unsafe impl Sync for f64ad {}
 unsafe impl Send for f64ad {}
+
+#[allow(non_camel_case_types)]
+pub trait f64ad_trait
+    : ComplexField
+{}
+impl f64ad_trait for f64 { }
+impl f64ad_trait for f64ad { }
 
 #[allow(non_camel_case_types)]
 #[derive(Clone, Copy)]
@@ -1598,6 +1615,16 @@ impl AddAssign for f64ad {
         *self = *self + rhs;
     }
 }
+impl AddAssign<f64> for f64ad {
+    fn add_assign(&mut self, rhs: f64) {
+        *self = *self + rhs;
+    }
+}
+impl AddAssign<f64ad> for f64 {
+    fn add_assign(&mut self, rhs: f64ad) {
+        *self = (*self + rhs).value();
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1694,6 +1721,16 @@ impl MulAssign for f64ad {
         *self = *self * rhs;
     }
 }
+impl MulAssign<f64> for f64ad {
+    fn mul_assign(&mut self, rhs: f64) {
+        *self = *self * rhs;
+    }
+}
+impl MulAssign<f64ad> for f64 {
+    fn mul_assign(&mut self, rhs: f64ad) {
+        *self = (*self * rhs).value();
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1787,6 +1824,16 @@ impl Sub<f64ad> for f64 {
 impl SubAssign for f64ad {
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
+    }
+}
+impl SubAssign<f64> for f64ad {
+    fn sub_assign(&mut self, rhs: f64) {
+        *self = *self - rhs;
+    }
+}
+impl SubAssign<f64ad> for f64 {
+    fn sub_assign(&mut self, rhs: f64ad) {
+        *self = (*self - rhs).value();
     }
 }
 
@@ -1886,6 +1933,16 @@ impl DivAssign for f64ad {
         *self = *self / rhs;
     }
 }
+impl DivAssign<f64> for f64ad {
+    fn div_assign(&mut self, rhs: f64) {
+        *self = *self / rhs;
+    }
+}
+impl DivAssign<f64ad> for f64 {
+    fn div_assign(&mut self, rhs: f64ad) {
+        *self = (*self / rhs).value();
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1898,9 +1955,33 @@ impl Rem for f64ad {
         self - (self / rhs).floor() * rhs
     }
 }
+impl Rem<f64> for f64ad {
+    type Output = f64ad;
+
+    fn rem(self, rhs: f64) -> Self::Output {
+        return self.rem(f64ad::f64(rhs));
+    }
+}
+impl Rem<f64ad> for f64 {
+    type Output = f64ad;
+
+    fn rem(self, rhs: f64ad) -> Self::Output {
+        return f64ad::f64(self).rem(rhs);
+    }
+}
 impl RemAssign for f64ad {
     fn rem_assign(&mut self, rhs: Self) {
         *self = *self % rhs;
+    }
+}
+impl RemAssign<f64> for f64ad {
+    fn rem_assign(&mut self, rhs: f64) {
+        *self = *self % rhs;
+    }
+}
+impl RemAssign<f64ad> for f64 {
+    fn rem_assign(&mut self, rhs: f64ad) {
+        *self = self.rem(rhs).value();
     }
 }
 
@@ -1961,6 +2042,16 @@ impl PartialEq for f64ad {
         }
     }
 }
+impl PartialEq<f64> for f64ad {
+    fn eq(&self, other: &f64) -> bool {
+        return self.eq(&f64ad::f64(*other));
+    }
+}
+impl PartialEq<f64ad> for f64 {
+    fn eq(&self, other: &f64ad) -> bool {
+        return self.eq(&other.value());
+    }
+}
 impl PartialOrd for f64ad_var {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         assert_eq!(self.computation_graph_id, other.computation_graph_id);
@@ -1968,7 +2059,7 @@ impl PartialOrd for f64ad_var {
         match &self.mode {
             ComputationGraphMode::Standard => {
                 let v1 = self.value();
-                let v2 = self.value();
+                let v2 = other.value();
 
                 if v1 == v2 {
                     return Some(Ordering::Equal);
@@ -2006,9 +2097,44 @@ impl PartialOrd for f64ad {
         }
     }
 }
+impl PartialOrd<f64> for f64ad {
+    fn partial_cmp(&self, other: &f64) -> Option<Ordering> {
+        return self.partial_cmp(&f64ad::f64(*other));
+    }
+}
+impl PartialOrd<f64ad> for f64 {
+    fn partial_cmp(&self, other: &f64ad) -> Option<Ordering> {
+        self.partial_cmp(&other.value())
+    }
+}
 impl Display for f64ad {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         f.write_str(&format!("{:?}", self)).expect("error");
         Ok(())
     }
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+impl From<f64> for f64ad {
+    fn from(a: f64) -> Self {
+        return f64ad::f64(a);
+    }
+}
+impl Into<f64> for f64ad {
+    fn into(self) -> f64 {
+        self.value()
+    }
+}
+impl From<f32> for f64ad {
+    fn from(a: f32) -> Self {
+        return f64ad::f64(a as f64);
+    }
+}
+impl Into<f32> for f64ad {
+    fn into(self) -> f32 {
+        self.value() as f32
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -1,4 +1,4 @@
-use num_traits::{FromPrimitive, Num, One, Signed, Zero};
+use num_traits::{Bounded, FromPrimitive, Num, One, Signed, Zero};
 use tinyvec::tiny_vec;
 use crate::f64ad::{f64ad, NodeType, f64ad_locked_var_operation_one_parent};
 
@@ -82,5 +82,15 @@ impl FromPrimitive for f64ad {
 
     fn from_u64(n: u64) -> Option<Self> {
         Some(f64ad::f64(n as f64))
+    }
+}
+
+impl Bounded for f64ad {
+    fn min_value() -> Self {
+        Self::f64(f64::MIN)
+    }
+
+    fn max_value() -> Self {
+        Self::f64(f64::MAX)
     }
 }
