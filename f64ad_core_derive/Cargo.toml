@@ -15,4 +15,4 @@ proc-macro = true
 [dependencies]
 syn = { version = "1.0.99", features = ["full" ,"extra-traits"] }
 quote = "1.0.21"
-f64ad_core = { path = "../f64ad_core", version = "0.0.3"}
+f64ad_core = { path = "../f64ad_core", version = "0.0.4"}

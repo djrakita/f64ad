@@ -17,8 +17,8 @@ members = [
 ]
 
 [dependencies]
-f64ad_core = {path = "f64ad_core", version = "0.0.3"}
-f64ad_core_derive = { path = "f64ad_core_derive", version = "0.0.3" }
+f64ad_core = {path = "f64ad_core", version = "0.0.4"}
+f64ad_core_derive = { path = "f64ad_core_derive", version = "0.0.4" }
 nalgebra = "0.31.1"
 # mimalloc = { version = "0.1.32", default-features = false }
 # jemallocator = "0.3.2"
