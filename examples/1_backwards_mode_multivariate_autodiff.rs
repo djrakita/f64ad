@@ -1,15 +1,15 @@
 use f64ad_core::ComplexField;
-use f64ad_core::f64ad::{ComputationGraphMode, GlobalComputationGraphs};
+use f64ad_core::f64ad::{ComputationGraphType, GlobalComputationGraphs};
 
 fn main() {
     // Create a computation graph.
-    let computation_graph = GlobalComputationGraphs::get_with_reset(None, None, ComputationGraphMode::Standard);
+    let computation_graph = GlobalComputationGraphs::get(None, None, ComputationGraphType::ComputationGraph1);
 
-    // Spawn an f64ad variables from computation graph.
-    let v0 = computation_graph.spawn_f64ad_var(2.0);
-    let v1 = computation_graph.spawn_f64ad_var(4.0);
-    let v2 = computation_graph.spawn_f64ad_var(6.0);
-    let v3 = computation_graph.spawn_f64ad_var(8.0);
+    // Spawn an f64ad_ variables from computation graph.
+    let v0 = computation_graph.spawn_variable(2.0);
+    let v1 = computation_graph.spawn_variable(4.0);
+    let v2 = computation_graph.spawn_variable(6.0);
+    let v3 = computation_graph.spawn_variable(8.0);
 
     // compute some result using our variables
     let result = v0.sin() * v1 + 5.0 * v2.log(v3);

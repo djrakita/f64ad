@@ -197,16 +197,16 @@ currently a placeholder and will be used for procedural macro implementations.</
 <p>In this Chapter, I will go through some examples that use f64ad.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="example-1-univariate-autodiff"><a class="header" href="#example-1-univariate-autodiff">Example 1: Univariate Autodiff</a></h1>
 <pre><pre class="playground"><code class="language-rust">use f64ad_core::ComplexField;
-use f64ad_core::f64ad::{ComputationGraphMode, GlobalComputationGraphs};
+use f64ad_core::f64ad::{ComputationGraphType, GlobalComputationGraphs};
 
 fn main() {
     // Create a computation graph.
-    let computation_graph = GlobalComputationGraphs::get_with_reset(None, None, ComputationGraphMode::Standard);
+    let computation_graph = GlobalComputationGraphs::get(None, None, ComputationGraphType::ComputationGraph1);
 
-    // Spawn an f64ad variable with a value of 2.
-    let v = computation_graph.spawn_f64ad_var(2.0);
+    // Spawn an f64ad_ variable with a value of 2.
+    let v = computation_graph.spawn_variable(2.0);
 
-    // You can now use an f64ad exactly the same as you would use a standard f64.  In this example,
+    // You can now use an f64ad_ exactly the same as you would use a standard f64.  In this example,
     // we are just using the `powi` function to take v to the third power.
     let result = v.powi(3);
     println!(&quot;Result of v.powi(3): {:?}&quot;, result);
@@ -228,23 +228,23 @@ fn main() {
 }
 </code></pre></pre>
 <p>Output</p>
-<pre><code class="language-text">Result of v.powi(3): f64ad_var(f64ad_var{ value: 8.0, node_idx: 1 })
+<pre><code class="language-text">Result of v.powi(3): f64ad_var_1(f64ad_var_1{ value: 8.0, node_idx: 1 })
 Backwards mode derivative: f64(12.0)
 Forward mode derivative: f64(12.0)
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="example-2-backwards-mode-multivariate-autodiff"><a class="header" href="#example-2-backwards-mode-multivariate-autodiff">Example 2: Backwards Mode Multivariate Autodiff</a></h1>
 <pre><pre class="playground"><code class="language-rust">use f64ad_core::ComplexField;
-use f64ad_core::f64ad::{ComputationGraphMode, GlobalComputationGraphs};
+use f64ad_core::f64ad::{ComputationGraphType, GlobalComputationGraphs};
 
 fn main() {
     // Create a computation graph.
-    let computation_graph = GlobalComputationGraphs::get_with_reset(None, None, ComputationGraphMode::Standard);
+    let computation_graph = GlobalComputationGraphs::get(None, None, ComputationGraphType::ComputationGraph1);
 
-    // Spawn an f64ad variables from computation graph.
-    let v0 = computation_graph.spawn_f64ad_var(2.0);
-    let v1 = computation_graph.spawn_f64ad_var(4.0);
-    let v2 = computation_graph.spawn_f64ad_var(6.0);
-    let v3 = computation_graph.spawn_f64ad_var(8.0);
+    // Spawn an f64ad_ variables from computation graph.
+    let v0 = computation_graph.spawn_variable(2.0);
+    let v1 = computation_graph.spawn_variable(4.0);
+    let v2 = computation_graph.spawn_variable(6.0);
+    let v3 = computation_graph.spawn_variable(8.0);
 
     // compute some result using our variables
     let result = v0.sin() * v1 + 5.0 * v2.log(v3);
@@ -269,7 +269,7 @@ fn main() {
 }
 </code></pre></pre>
 <p>Output</p>
-<pre><code class="language-text">Result: f64ad_var(f64ad_var{ value: 7.9454605418379876, node_idx: 8 })
+<pre><code class="language-text">Result: f64ad_var_1(f64ad_var_1{ value: 7.9454605418379876, node_idx: 8 })
 d_result_d_v0: f64(-1.6645873461885696)
 d_result_d_v1: f64(0.9092974268256817)
 d_result_d_v2: f64(0.40074862246915655)
@@ -277,14 +277,14 @@ d_result_d_v3: f64(-0.25898004032460736)
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="example-3-forward-mode-multivariate-autodiff"><a class="header" href="#example-3-forward-mode-multivariate-autodiff">Example 3: Forward Mode Multivariate Autodiff</a></h1>
 <pre><pre class="playground"><code class="language-rust">use f64ad_core::ComplexField;
-use f64ad_core::f64ad::{ComputationGraphMode, GlobalComputationGraphs};
+use f64ad_core::f64ad::{ComputationGraphType, GlobalComputationGraphs};
 
 fn main() {
     // Create a computation graph.
-    let computation_graph = GlobalComputationGraphs::get_with_reset(None, None, ComputationGraphMode::Standard);
+    let computation_graph = GlobalComputationGraphs::get(None, None, ComputationGraphType::ComputationGraph1);
 
-    // Spawn an f64ad variable with a value of 2.
-    let v = computation_graph.spawn_f64ad_var(2.0);
+    // Spawn an f64ad_ variable with a value of 2.
+    let v = computation_graph.spawn_variable(2.0);
 
     // compute some results using our variable
     let result0 = v.sin();
@@ -308,20 +308,19 @@ fn main() {
     println!(&quot;d_result0_d_v: {:?}&quot;, d_result0_d_v);
     println!(&quot;d_result1_d_v: {:?}&quot;, d_result1_d_v);
     println!(&quot;d_result2_d_v: {:?}&quot;, d_result2_d_v);
-}
 </code></pre></pre>
 <p>Output</p>
-<pre><code class="language-text">Result0: f64ad_var(f64ad_var{ value: 0.9092974268256817, node_idx: 1 })
-Result1: f64ad_var(f64ad_var{ value: -0.4161468365471424, node_idx: 2 })
-Result2: f64ad_var(f64ad_var{ value: -2.185039863261519, node_idx: 3 })
+<pre><code class="language-text">Result0: f64ad_var_1(f64ad_var_1{ value: 0.9092974268256817, node_idx: 1 })
+Result1: f64ad_var_1(f64ad_var_1{ value: -0.4161468365471424, node_idx: 2 })
+Result2: f64ad_var_1(f64ad_var_1{ value: -2.185039863261519, node_idx: 3 })
 d_result0_d_v: f64(-0.4161468365471424)
 d_result1_d_v: f64(-0.9092974268256817)
 d_result2_d_v: f64(5.774399204041917)
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="example-4-polymorphism"><a class="header" href="#example-4-polymorphism">Example 4: Polymorphism</a></h1>
-<pre><pre class="playground"><code class="language-rust">use f64ad_core::f64ad::{ComputationGraphMode, f64ad, GlobalComputationGraphs};
+<pre><pre class="playground"><code class="language-rust">use f64ad_core::f64ad::{ComputationGraphType, GlobalComputationGraphs, f64ad};
 
-// f64ad is an enum here that is a drop-in replacement for f64.  It can track derivative information
+// f64ad_ is an enum here that is a drop-in replacement for f64.  It can track derivative information
 // for both, either, or neither of the variables, you can select what you want depending on your
 // application at the time.
 fn f64ad_test(a: f64ad, b: f64ad) -&gt; f64ad {
@@ -329,46 +328,46 @@ fn f64ad_test(a: f64ad, b: f64ad) -&gt; f64ad {
 }
 
 fn main() {
-    let computation_graph = GlobalComputationGraphs::get_with_reset(None, None, ComputationGraphMode::Standard);
-    let a = computation_graph.spawn_f64ad_var(1.0);
-    let b = computation_graph.spawn_f64ad_var(2.0);
+    let computation_graph = GlobalComputationGraphs::get(None, None, ComputationGraphType::ComputationGraph1);
+    let a = computation_graph.spawn_variable(1.0);
+    let b = computation_graph.spawn_variable(2.0);
 
-    // Compute result using two f64ad variables that track derivative information for both `a` and `b'.
+    // Compute result using two f64ad_ variables that track derivative information for both `a` and `b'.
     let result1 = f64ad_test(a, b);
     println!(&quot;result 1: {:?}&quot;, result1);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
 
-    let computation_graph = GlobalComputationGraphs::get_with_reset(None, None, ComputationGraphMode::Standard);
-    let a = computation_graph.spawn_f64ad_var(1.0);
+    computation_graph.reset();
+    let a = computation_graph.spawn_variable(1.0);
 
-    // Compute result using one f64ad variables that only tracks derivative information for `a'.
+    // Compute result using one f64ad_ variables that only tracks derivative information for `a'.
     let result2 = f64ad_test(a, f64ad::f64(2.0));
     println!(&quot;result 2: {:?}&quot;, result2);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
 
-    // Compute result using zero f64ad variables.  This operation will not keep track of derivative information
+    // Compute result using zero f64ad_ variables.  This operation will not keep track of derivative information
     // for any variable and will essentially run as normal f64 floats with almost no overhead.
     let result3 = f64ad_test(f64ad::f64(1.0), f64ad::f64(2.0));
     println!(&quot;result 3: {:?}&quot;, result3);
 }
 </code></pre></pre>
 <p>Output</p>
-<pre><code class="language-text">result 1: f64ad_var(f64ad_var{ value: 3.0, node_idx: 2 })
-result 2: f64ad_var(f64ad_var{ value: 3.0, node_idx: 1 })
+<pre><code class="language-text">result 1: f64ad_var_1(f64ad_var_1{ value: 3.0, node_idx: 2 })
+result 2: f64ad_var_1(f64ad_var_1{ value: 3.0, node_idx: 1 })
 result 3: f64(3.0)
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="example-5-univariate-higher-order-derivatives"><a class="header" href="#example-5-univariate-higher-order-derivatives">Example 5: Univariate Higher Order Derivatives</a></h1>
 <pre><pre class="playground"><code class="language-rust">use f64ad_core::ComplexField;
-use f64ad_core::f64ad::{ComputationGraphMode, GlobalComputationGraphs};
+use f64ad_core::f64ad::{ComputationGraphType, GlobalComputationGraphs};
 
 fn main() {
     // Create a computation graph.
-    let computation_graph = GlobalComputationGraphs::get_with_reset(None, None, ComputationGraphMode::Standard);
+    let computation_graph = GlobalComputationGraphs::get(None, None, ComputationGraphType::ComputationGraphF);
 
-    // Spawn an f64ad variables from computation graph.
-    let v = computation_graph.spawn_f64ad_var(2.0);
+    // Spawn an f64ad_ variables from computation graph.
+    let v = computation_graph.spawn_variable(2.0);
 
     let result = v.powi(5);
     println!(&quot;Result: {:?}&quot;, result);
@@ -418,33 +417,32 @@ fn main() {
 }
 </code></pre></pre>
 <p>Output</p>
-<pre><code class="language-text">Result: f64ad_var(f64ad_var{ value: 32.0, node_idx: 1 })
+<pre><code class="language-text">Result: f64ad_var_f(f64ad_var_f{ value: 32.0, node_idx: 1 })
 ////////////////////////////////////////////////////////////////////////////////////
-d_result_d_v: f64ad_var(f64ad_var{ value: 80.0, node_idx: 6 })
+d_result_d_v: f64ad_var_f(f64ad_var_f{ value: 80.0, node_idx: 5 })
 ////////////////////////////////////////////////////////////////////////////////////
-d2_result_d_v2: f64ad_var(f64ad_var{ value: 160.0, node_idx: 23 })
+d2_result_d_v2: f64ad_var_f(f64ad_var_f{ value: 160.0, node_idx: 13 })
 ////////////////////////////////////////////////////////////////////////////////////
-d3_result_d_v3: f64ad_var(f64ad_var{ value: 240.0, node_idx: 80 })
+d3_result_d_v3: f64ad_var_f(f64ad_var_f{ value: 240.0, node_idx: 29 })
 ////////////////////////////////////////////////////////////////////////////////////
-d4_result_d_v4: f64ad_var(f64ad_var{ value: 240.0, node_idx: 249 })
+d4_result_d_v4: f64ad_var_f(f64ad_var_f{ value: 240.0, node_idx: 61 })
 ////////////////////////////////////////////////////////////////////////////////////
-d5_result_d_v5: f64ad_var(f64ad_var{ value: 120.0, node_idx: 706 })
+d5_result_d_v5: f64ad_var_f(f64ad_var_f{ value: 120.0, node_idx: 125 })
 ////////////////////////////////////////////////////////////////////////////////////
-d6_result_d_v6: f64ad_var(f64ad_var{ value: 0.0, node_idx: 1888 })
+d6_result_d_v6: f64ad_var_f(f64ad_var_f{ value: 0.0, node_idx: 253 })
 ////////////////////////////////////////////////////////////////////////////////////
-
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="example-6-multivariate-higher-order-derivatives"><a class="header" href="#example-6-multivariate-higher-order-derivatives">Example 6: Multivariate Higher Order Derivatives</a></h1>
 <pre><pre class="playground"><code class="language-rust">use f64ad_core::ComplexField;
-use f64ad_core::f64ad::{ComputationGraphMode, GlobalComputationGraphs};
+use f64ad_core::f64ad::{ComputationGraphType, GlobalComputationGraphs};
 
 fn main() {
     // Create a computation graph.
-    let computation_graph = GlobalComputationGraphs::get_with_reset(None, None, ComputationGraphMode::Standard);
+    let computation_graph = GlobalComputationGraphs::get(None, None, ComputationGraphType::ComputationGraphF);
 
-    // Spawn an f64ad variables from computation graph.
-    let v0 = computation_graph.spawn_f64ad_var(2.0);
-    let v1 = computation_graph.spawn_f64ad_var(4.0);
+    // Spawn an f64ad_ variables from computation graph.
+    let v0 = computation_graph.spawn_variable(2.0);
+    let v1 = computation_graph.spawn_variable(4.0);
 
     let result = v0.powf(v1);
     println!(&quot;Result: {:?}&quot;, result);
@@ -477,29 +475,29 @@ fn main() {
 }
 </code></pre></pre>
 <p>Output</p>
-<pre><code class="language-text">Result: f64ad_var(f64ad_var{ value: 16.0, node_idx: 2 })
+<pre><code class="language-text">Result: f64ad_var_f(f64ad_var_f{ value: 16.0, node_idx: 2 })
 ////////////////////////////////////////////////////////////////////////////////////
-d_result_d_v0: f64ad_var(f64ad_var{ value: 32.0, node_idx: 11 })
-d_result_d_v0: f64ad_var(f64ad_var{ value: 11.090354888959125, node_idx: 13 })
+d_result_d_v0: f64ad_var_f(f64ad_var_f{ value: 32.0, node_idx: 10 })
+d_result_d_v0: f64ad_var_f(f64ad_var_f{ value: 11.090354888959125, node_idx: 12 })
 ////////////////////////////////////////////////////////////////////////////////////
-d2_result_dv0v0: f64ad_var(f64ad_var{ value: 48.0, node_idx: 66 })
-d2_result_dv0v1: f64ad_var(f64ad_var{ value: 30.18070977791825, node_idx: 68 })
-d2_result_dv1v0: f64ad_var(f64ad_var{ value: 30.18070977791825, node_idx: 290 })
-d2_result_dv1v1: f64ad_var(f64ad_var{ value: 7.687248222691222, node_idx: 292 })
+d2_result_dv0v0: f64ad_var_f(f64ad_var_f{ value: 48.0, node_idx: 54 })
+d2_result_dv0v1: f64ad_var_f(f64ad_var_f{ value: 30.18070977791825, node_idx: 56 })
+d2_result_dv1v0: f64ad_var_f(f64ad_var_f{ value: 30.18070977791825, node_idx: 238 })
+d2_result_dv1v1: f64ad_var_f(f64ad_var_f{ value: 7.687248222691222, node_idx: 240 })
 ////////////////////////////////////////////////////////////////////////////////////
 
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="example-7-jacobian"><a class="header" href="#example-7-jacobian">Example 7: Jacobian</a></h1>
 <pre><pre class="playground"><code class="language-rust">use f64ad_core::ComplexField;
-use f64ad_core::f64ad::{ComputationGraphMode, f64ad_jacobian, GlobalComputationGraphs};
+use f64ad_core::f64ad::{ComputationGraphType, f64ad_jacobian, GlobalComputationGraphs};
 
 fn main() {
     // Create a computation graph.
-    let computation_graph = GlobalComputationGraphs::get_with_reset(None, None, ComputationGraphMode::Standard);
+    let computation_graph = GlobalComputationGraphs::get(None, None, ComputationGraphType::ComputationGraphF);
 
-    // Spawn an f64ad variables from computation graph.
-    let v0 = computation_graph.spawn_f64ad_var(2.0);
-    let v1 = computation_graph.spawn_f64ad_var(4.0);
+    // Spawn an f64ad_ variables from computation graph.
+    let v0 = computation_graph.spawn_variable(2.0);
+    let v1 = computation_graph.spawn_variable(4.0);
 
     let result1 = v0.powf(v1);
     let result2 = v1.log(v0);
@@ -517,11 +515,10 @@ fn main() {
     let higher_order_jacobian = f64ad_jacobian(&amp;[v0, v1], &amp;[result1, result2], 4);
     higher_order_jacobian.print_summary();
 }
-}
 </code></pre></pre>
 <p>Output</p>
-<pre><code class="language-text">Result1: f64ad_var(f64ad_var{ value: 16.0 node_idx: 2 })
-Result2: f64ad_var(f64ad_var{ value: 2.0 node_idx: 3 })
+<pre><code class="language-text">Result1: f64ad_var_f(f64ad_var_f{ value: 16.0, node_idx: 2 })
+Result2: f64ad_var_f(f64ad_var_f{ value: 2.0, node_idx: 3 })
 ////////////////////////////////////////////////////////////////////////////////////
 0 --- output: 0, inputs wrt: [0], value: 32.0
 1 --- output: 0, inputs wrt: [1], value: 11.090354888959125

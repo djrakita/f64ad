@@ -1,6 +1,6 @@
 [package]
 name = "f64ad_core"
-version = "0.0.3"
+version = "0.0.4"
 description = "Easy to use, efficient, and highly flexible automatic differentiation in Rust."
 edition = "2021"
 keywords = ["math", "autodiff", "ad"]
@@ -19,6 +19,14 @@ rayon = "1.5.3"
 tinyvec = {version = "1.6.0", features = ['alloc'] }
 once_cell = "1.14.0"
 num_cpus = "1.13.1"
+timeit = "0.1.2"
+mimalloc = { version = "0.1.32", default-features = false }
+jemallocator = "0.3.2"
+
+# [features]
+# default = [ ]
+# inline_on = [ ]
+# inline_always_on = [ ]
 
 # [profile.dev]
 # opt-level = 3

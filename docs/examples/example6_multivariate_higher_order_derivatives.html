@@ -146,15 +146,15 @@
                     <main>
                         <h1 id="example-6-multivariate-higher-order-derivatives"><a class="header" href="#example-6-multivariate-higher-order-derivatives">Example 6: Multivariate Higher Order Derivatives</a></h1>
 <pre><pre class="playground"><code class="language-rust">use f64ad_core::ComplexField;
-use f64ad_core::f64ad::{ComputationGraphMode, GlobalComputationGraphs};
+use f64ad_core::f64ad::{ComputationGraphType, GlobalComputationGraphs};
 
 fn main() {
     // Create a computation graph.
-    let computation_graph = GlobalComputationGraphs::get_with_reset(None, None, ComputationGraphMode::Standard);
+    let computation_graph = GlobalComputationGraphs::get(None, None, ComputationGraphType::ComputationGraphF);
 
-    // Spawn an f64ad variables from computation graph.
-    let v0 = computation_graph.spawn_f64ad_var(2.0);
-    let v1 = computation_graph.spawn_f64ad_var(4.0);
+    // Spawn an f64ad_ variables from computation graph.
+    let v0 = computation_graph.spawn_variable(2.0);
+    let v1 = computation_graph.spawn_variable(4.0);
 
     let result = v0.powf(v1);
     println!(&quot;Result: {:?}&quot;, result);
@@ -187,15 +187,15 @@ fn main() {
 }
 </code></pre></pre>
 <p>Output</p>
-<pre><code class="language-text">Result: f64ad_var(f64ad_var{ value: 16.0, node_idx: 2 })
+<pre><code class="language-text">Result: f64ad_var_f(f64ad_var_f{ value: 16.0, node_idx: 2 })
 ////////////////////////////////////////////////////////////////////////////////////
-d_result_d_v0: f64ad_var(f64ad_var{ value: 32.0, node_idx: 11 })
-d_result_d_v0: f64ad_var(f64ad_var{ value: 11.090354888959125, node_idx: 13 })
+d_result_d_v0: f64ad_var_f(f64ad_var_f{ value: 32.0, node_idx: 10 })
+d_result_d_v0: f64ad_var_f(f64ad_var_f{ value: 11.090354888959125, node_idx: 12 })
 ////////////////////////////////////////////////////////////////////////////////////
-d2_result_dv0v0: f64ad_var(f64ad_var{ value: 48.0, node_idx: 66 })
-d2_result_dv0v1: f64ad_var(f64ad_var{ value: 30.18070977791825, node_idx: 68 })
-d2_result_dv1v0: f64ad_var(f64ad_var{ value: 30.18070977791825, node_idx: 290 })
-d2_result_dv1v1: f64ad_var(f64ad_var{ value: 7.687248222691222, node_idx: 292 })
+d2_result_dv0v0: f64ad_var_f(f64ad_var_f{ value: 48.0, node_idx: 54 })
+d2_result_dv0v1: f64ad_var_f(f64ad_var_f{ value: 30.18070977791825, node_idx: 56 })
+d2_result_dv1v0: f64ad_var_f(f64ad_var_f{ value: 30.18070977791825, node_idx: 238 })
+d2_result_dv1v1: f64ad_var_f(f64ad_var_f{ value: 7.687248222691222, node_idx: 240 })
 ////////////////////////////////////////////////////////////////////////////////////
 
 </code></pre>

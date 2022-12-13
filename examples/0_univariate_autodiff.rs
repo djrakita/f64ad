@@ -1,14 +1,14 @@
 use f64ad_core::ComplexField;
-use f64ad_core::f64ad::{ComputationGraphMode, GlobalComputationGraphs};
+use f64ad_core::f64ad::{ComputationGraphType, GlobalComputationGraphs};
 
 fn main() {
     // Create a computation graph.
-    let computation_graph = GlobalComputationGraphs::get_with_reset(None, None, ComputationGraphMode::Standard);
+    let computation_graph = GlobalComputationGraphs::get(None, None, ComputationGraphType::ComputationGraph1);
 
-    // Spawn an f64ad variable with a value of 2.
-    let v = computation_graph.spawn_f64ad_var(2.0);
+    // Spawn an f64ad_ variable with a value of 2.
+    let v = computation_graph.spawn_variable(2.0);
 
-    // You can now use an f64ad exactly the same as you would use a standard f64.  In this example,
+    // You can now use an f64ad_ exactly the same as you would use a standard f64.  In this example,
     // we are just using the `powi` function to take v to the third power.
     let result = v.powi(3);
     println!("Result of v.powi(3): {:?}", result);

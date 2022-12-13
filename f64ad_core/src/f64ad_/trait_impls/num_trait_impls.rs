@@ -1,23 +1,18 @@
 use num_traits::{Bounded, FromPrimitive, Num, One, Signed, Zero};
-use crate::f64ad::{f64ad, f64ad_universal_function_1_operand, NodeTypeClass};
+use tinyvec::tiny_vec;
+use crate::f64ad_::{f64ad, NodeType, f64ad_locked_var_operation_one_parent};
 
 impl Zero for f64ad {
-    #[cfg_attr(feature = "inline_on", inline)]
-    #[cfg_attr(feature = "inline_always_on", inline(always))]
     fn zero() -> Self {
         return f64ad::f64(0.0);
     }
 
-    #[cfg_attr(feature = "inline_on", inline)]
-    #[cfg_attr(feature = "inline_always_on", inline(always))]
     fn is_zero(&self) -> bool {
-        return self.value() == 0.0;
+        return self.value() == 0.0
     }
 }
 
 impl One for f64ad {
-    #[cfg_attr(feature = "inline_on", inline)]
-    #[cfg_attr(feature = "inline_always_on", inline(always))]
     fn one() -> Self {
         Self::f64(1.0)
     }
@@ -33,10 +28,19 @@ impl Num for f64ad {
 }
 
 impl Signed for f64ad {
-    #[cfg_attr(feature = "inline_on", inline)]
-    #[cfg_attr(feature = "inline_always_on", inline(always))]
     fn abs(&self) -> Self {
-        f64ad_universal_function_1_operand(*self, NodeTypeClass::Abs)
+        return match self {
+            f64ad::f64ad_var(f) => {
+                let res = f.computation_graph.add_node(NodeType::Abs, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Abs))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.abs())
+            }
+        }
     }
 
     fn abs_sub(&self, other: &Self) -> Self {
@@ -44,11 +48,22 @@ impl Signed for f64ad {
             f64ad::f64(0.0)
         } else {
             *self - *other
-        };
+        }
     }
 
     fn signum(&self) -> Self {
-        f64ad_universal_function_1_operand(*self, NodeTypeClass::Signum)
+        return match self {
+            f64ad::f64ad_var(f) => {
+                let res = f.computation_graph.add_node(NodeType::Signum, tiny_vec!([u32; 2] => f.node_idx), tiny_vec!([f64; 1]));
+                f64ad::f64ad_var(res)
+            }
+            f64ad::f64ad_locked_var(f) => {
+                f64ad::f64ad_locked_var(f64ad_locked_var_operation_one_parent(f, None, NodeType::Signum))
+            }
+            f64ad::f64(f) => {
+                f64ad::f64(f.signum())
+            }
+        }
     }
 
     fn is_positive(&self) -> bool {

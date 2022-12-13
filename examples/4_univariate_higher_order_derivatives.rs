@@ -1,12 +1,12 @@
 use f64ad_core::ComplexField;
-use f64ad_core::f64ad::{ComputationGraphMode, GlobalComputationGraphs};
+use f64ad_core::f64ad::{ComputationGraphType, GlobalComputationGraphs};
 
 fn main() {
     // Create a computation graph.
-    let computation_graph = GlobalComputationGraphs::get_with_reset(None, None, ComputationGraphMode::Standard);
+    let computation_graph = GlobalComputationGraphs::get(None, None, ComputationGraphType::ComputationGraphF);
 
-    // Spawn an f64ad variables from computation graph.
-    let v = computation_graph.spawn_f64ad_var(2.0);
+    // Spawn an f64ad_ variables from computation graph.
+    let v = computation_graph.spawn_variable(2.0);
 
     let result = v.powi(5);
     println!("Result: {:?}", result);

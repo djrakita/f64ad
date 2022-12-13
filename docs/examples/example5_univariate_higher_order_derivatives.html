@@ -146,14 +146,14 @@
                     <main>
                         <h1 id="example-5-univariate-higher-order-derivatives"><a class="header" href="#example-5-univariate-higher-order-derivatives">Example 5: Univariate Higher Order Derivatives</a></h1>
 <pre><pre class="playground"><code class="language-rust">use f64ad_core::ComplexField;
-use f64ad_core::f64ad::{ComputationGraphMode, GlobalComputationGraphs};
+use f64ad_core::f64ad::{ComputationGraphType, GlobalComputationGraphs};
 
 fn main() {
     // Create a computation graph.
-    let computation_graph = GlobalComputationGraphs::get_with_reset(None, None, ComputationGraphMode::Standard);
+    let computation_graph = GlobalComputationGraphs::get(None, None, ComputationGraphType::ComputationGraphF);
 
-    // Spawn an f64ad variables from computation graph.
-    let v = computation_graph.spawn_f64ad_var(2.0);
+    // Spawn an f64ad_ variables from computation graph.
+    let v = computation_graph.spawn_variable(2.0);
 
     let result = v.powi(5);
     println!(&quot;Result: {:?}&quot;, result);
@@ -203,21 +203,20 @@ fn main() {
 }
 </code></pre></pre>
 <p>Output</p>
-<pre><code class="language-text">Result: f64ad_var(f64ad_var{ value: 32.0, node_idx: 1 })
+<pre><code class="language-text">Result: f64ad_var_f(f64ad_var_f{ value: 32.0, node_idx: 1 })
 ////////////////////////////////////////////////////////////////////////////////////
-d_result_d_v: f64ad_var(f64ad_var{ value: 80.0, node_idx: 6 })
+d_result_d_v: f64ad_var_f(f64ad_var_f{ value: 80.0, node_idx: 5 })
 ////////////////////////////////////////////////////////////////////////////////////
-d2_result_d_v2: f64ad_var(f64ad_var{ value: 160.0, node_idx: 23 })
+d2_result_d_v2: f64ad_var_f(f64ad_var_f{ value: 160.0, node_idx: 13 })
 ////////////////////////////////////////////////////////////////////////////////////
-d3_result_d_v3: f64ad_var(f64ad_var{ value: 240.0, node_idx: 80 })
+d3_result_d_v3: f64ad_var_f(f64ad_var_f{ value: 240.0, node_idx: 29 })
 ////////////////////////////////////////////////////////////////////////////////////
-d4_result_d_v4: f64ad_var(f64ad_var{ value: 240.0, node_idx: 249 })
+d4_result_d_v4: f64ad_var_f(f64ad_var_f{ value: 240.0, node_idx: 61 })
 ////////////////////////////////////////////////////////////////////////////////////
-d5_result_d_v5: f64ad_var(f64ad_var{ value: 120.0, node_idx: 706 })
+d5_result_d_v5: f64ad_var_f(f64ad_var_f{ value: 120.0, node_idx: 125 })
 ////////////////////////////////////////////////////////////////////////////////////
-d6_result_d_v6: f64ad_var(f64ad_var{ value: 0.0, node_idx: 1888 })
+d6_result_d_v6: f64ad_var_f(f64ad_var_f{ value: 0.0, node_idx: 253 })
 ////////////////////////////////////////////////////////////////////////////////////
-
 </code></pre>
 
                     </main>
