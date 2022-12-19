@@ -1,6 +1,6 @@
 [package]
 name = "f64ad"
-version = "0.0.4"
+version = "0.0.5"
 description = "Easy to use, efficient, and highly flexible automatic differentiation in Rust."
 edition = "2021"
 keywords = ["math", "autodiff", "ad"]
@@ -17,8 +17,8 @@ members = [
 ]
 
 [dependencies]
-f64ad_core = {path = "f64ad_core", version = "0.0.4"}
-f64ad_core_derive = { path = "f64ad_core_derive", version = "0.0.4" }
+f64ad_core = {path = "f64ad_core", version = "0.0.5"}
+f64ad_core_derive = { path = "f64ad_core_derive", version = "0.0.5" }
 nalgebra = "0.31.1"
 # mimalloc = { version = "0.1.32", default-features = false }
 # jemallocator = "0.3.2"
