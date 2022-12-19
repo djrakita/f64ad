@@ -146,11 +146,11 @@
                     <main>
                         <h1 id="example-3-forward-mode-multivariate-autodiff"><a class="header" href="#example-3-forward-mode-multivariate-autodiff">Example 3: Forward Mode Multivariate Autodiff</a></h1>
 <pre><pre class="playground"><code class="language-rust">use f64ad_core::ComplexField;
-use f64ad_core::f64ad::{ComputationGraphType, GlobalComputationGraphs};
+use f64ad_core::f64ad::{GlobalComputationGraphs};
 
 fn main() {
     // Create a computation graph.
-    let computation_graph = GlobalComputationGraphs::get(None, None, ComputationGraphType::ComputationGraph1);
+    let computation_graph = GlobalComputationGraphs::get(None, None);
 
     // Spawn an f64ad_ variable with a value of 2.
     let v = computation_graph.spawn_variable(2.0);
@@ -179,9 +179,9 @@ fn main() {
     println!(&quot;d_result2_d_v: {:?}&quot;, d_result2_d_v);
 </code></pre></pre>
 <p>Output</p>
-<pre><code class="language-text">Result0: f64ad_var_1(f64ad_var_1{ value: 0.9092974268256817, node_idx: 1 })
-Result1: f64ad_var_1(f64ad_var_1{ value: -0.4161468365471424, node_idx: 2 })
-Result2: f64ad_var_1(f64ad_var_1{ value: -2.185039863261519, node_idx: 3 })
+<pre><code class="language-text">Result0: f64ad_var_f(f64ad_var_f{ value: 0.9092974268256817, node_idx: 1 })
+Result1: f64ad_var_f(f64ad_var_f{ value: -0.4161468365471424, node_idx: 2 })
+Result2: f64ad_var_f(f64ad_var_f{ value: -2.185039863261519, node_idx: 3 })
 d_result0_d_v: f64(-0.4161468365471424)
 d_result1_d_v: f64(-0.9092974268256817)
 d_result2_d_v: f64(5.774399204041917)

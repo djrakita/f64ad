@@ -30,6 +30,8 @@ nalgebra = "0.31.1"
 # tinyvec = {version = "1.6.0", features = ['alloc'] }
 # num-traits = "0.2.15"
 # timeit = "0.1.2"
+eval = "0.1.1"
+
 
 [profile.dev]
 opt-level = 3

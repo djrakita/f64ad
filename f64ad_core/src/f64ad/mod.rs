@@ -18,6 +18,7 @@ pub mod f64ad_var_1_mod;
 pub mod f64ad_var_f_mod;
 pub mod f64ad_var_l_mod;
 pub mod f64ad_var_t_mod;
+pub mod manual_derivative_functions;
 
 #[allow(non_camel_case_types)]
 #[derive(Clone, Copy, Debug)]
@@ -126,8 +127,7 @@ pub enum F64adType {
     Var1,
     VarF,
     VarT,
-    VarL,
-    VarL2
+    VarL
 }
 pub enum ComputationGraph {
     ComputationGraph1(RefCell<ComputationGraph1>),
@@ -148,9 +148,6 @@ impl ComputationGraph {
                 Self::ComputationGraphT(RefCell::new(ComputationGraphT::new()))
             }
             ComputationGraphType::ComputationGraphL => {
-                panic!("Cannot initialize a locked computation graph in this way.  Must be done through through global structure.")
-            }
-            ComputationGraphType::ComputationGraphL2 => {
                 panic!("Cannot initialize a locked computation graph in this way.  Must be done through through global structure.")
             }
         }
@@ -272,6 +269,7 @@ impl ComputationGraph {
         }
     }
     #[inline(always)]
+    #[allow(dead_code)]
     pub (crate) fn pause(&self) {
         match self {
             ComputationGraph::ComputationGraph1(c) => {
@@ -281,6 +279,7 @@ impl ComputationGraph {
         }
     }
     #[inline(always)]
+    #[allow(dead_code)]
     pub (crate) fn unpause(&self) {
         match self {
             ComputationGraph::ComputationGraph1(c) => {
@@ -299,8 +298,7 @@ pub enum ComputationGraphType {
     ComputationGraph1,
     ComputationGraphF,
     ComputationGraphT,
-    ComputationGraphL,
-    ComputationGraphL2
+    ComputationGraphL
 }
 
 #[derive(Clone)]
@@ -432,7 +430,15 @@ static mut _GLOBAL_COMPUTATION_GRAPHS: OnceCell<Mutex<HashMap<(String, usize, Co
 
 pub struct GlobalComputationGraphs;
 impl GlobalComputationGraphs {
-    pub fn get(name: Option<&str>, idx: Option<usize>, computation_graph_type: ComputationGraphType) -> GlobalComputationGraph {
+    /// This function should be used to access a `GlobalComputationGraph`.  The `name` and `idx`
+    /// inputs here can be used to access different graphs.  This even works across threads
+    /// allowing for nice multithreaded automatic differentiation.  NOTE: `GlobalComputationGraph`
+    /// objects should be reset whenever the previous computation is fully complete, this will
+    /// help avoid an excessive use of memory.
+    pub fn get(name: Option<&str>, idx: Option<usize>) -> GlobalComputationGraph {
+        return Self::get_internal(name, idx, ComputationGraphType::ComputationGraphF);
+    }
+    fn get_internal(name: Option<&str>, idx: Option<usize>, computation_graph_type: ComputationGraphType) -> GlobalComputationGraph {
         let hashmap = unsafe { _GLOBAL_COMPUTATION_GRAPHS.get_or_init(|| Mutex::new(HashMap::new())) };
 
         let name = match name {
@@ -451,7 +457,7 @@ impl GlobalComputationGraphs {
             None => {
                 binding.insert((name.clone(), idx, computation_graph_type), ComputationGraph::new(computation_graph_type));
                 drop(binding);
-                Self::get(Some(&name), Some(idx), computation_graph_type)
+                Self::get_internal(Some(&name), Some(idx), computation_graph_type)
             }
             Some(computation_graph) => {
                 let r: *const ComputationGraph = computation_graph;
@@ -472,7 +478,7 @@ fn f64ad_universal_backwards_mode_grad(v: f64ad, add_to_computation_graph: bool)
     'l: for node_idx in (0..l).rev() {
         let (parents, node_type_class, operands_mode) = computation_graph.get_node_bundle(node_idx);
         if node_type_class == NodeTypeClass::InputVariable { continue 'l; }
-        let derivatives = compute_derivatives(convert_to_f64_if_not_add_to_computation_graph(parents[0].unwrap(), add_to_computation_graph), parents[1], node_type_class, operands_mode, add_to_computation_graph);
+        let derivatives = compute_derivatives(parents[0].unwrap(), parents[1], node_type_class, operands_mode, add_to_computation_graph);
         match operands_mode {
             NodeOperandsMode::TwoParents => {
                 let parent0 = parents[0].unwrap();
@@ -491,7 +497,7 @@ fn f64ad_universal_backwards_mode_grad(v: f64ad, add_to_computation_graph: bool)
                 let curr_deriv = derivs[node_idx];
                 derivs[parent1.node_idx()] += curr_deriv * derivatives[0];
             }
-            NodeOperandsMode::NoParents => {}
+            NodeOperandsMode::NoParents => { }
         }
     }
 
@@ -1236,6 +1242,10 @@ impl JacobianEntrySignature {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// TODO: These functions are not working yet.  Maybe fix them for ComputationGraph1?
+/*
+// Todo: this is currently incorrect.  Outputs can have more than one parent, and right now this
+// Todo: is only set up for one parent.
 pub fn bind_manual_derivative_between_values(i: &f64ad, o: &mut f64ad, derivative: f64) {
     assert_eq!(i.map_to_type(), F64adType::Var1);
     let computation_graph = i.computation_graph();
@@ -1269,6 +1279,7 @@ pub fn manual_derivative_function<I: Debug, O: Debug, F0, F1, F2>(
     }
 
 }
+*/
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 

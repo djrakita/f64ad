@@ -1,4 +1,4 @@
-use f64ad_core::f64ad::{ComputationGraphType, GlobalComputationGraphs, f64ad};
+use f64ad_core::f64ad::{GlobalComputationGraphs, f64ad};
 
 // f64ad_ is an enum here that is a drop-in replacement for f64.  It can track derivative information
 // for both, either, or neither of the variables, you can select what you want depending on your
@@ -8,7 +8,7 @@ fn f64ad_test(a: f64ad, b: f64ad) -> f64ad {
 }
 
 fn main() {
-    let computation_graph = GlobalComputationGraphs::get(None, None, ComputationGraphType::ComputationGraph1);
+    let computation_graph = GlobalComputationGraphs::get(None, None);
     let a = computation_graph.spawn_variable(1.0);
     let b = computation_graph.spawn_variable(2.0);
 
