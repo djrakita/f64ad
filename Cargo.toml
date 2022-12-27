@@ -14,6 +14,7 @@ repository = "https://github.com/djrakita/f64ad"
 members = [
     "f64ad_core",
     "f64ad_core_derive",
+    "f64ad_optimization"
 ]
 
 [dependencies]
