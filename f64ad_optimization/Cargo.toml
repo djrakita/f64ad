@@ -1,6 +1,10 @@
 [package]
 name = "f64ad_optimization"
 version = "0.0.1"
+description = "Optimization library that uses the f64ad crate for all derivative and gradient calculations."
 edition = "2021"
+keywords = ["math", "autodiff", "ad", "optimization"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/djrakita/f64ad"
 
 [dependencies]
