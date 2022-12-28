@@ -8,3 +8,11 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/djrakita/f64ad"
 
 [dependencies]
+f64ad_core = { path = "../f64ad_core", version = "0.0.5" }
+nlopt = { version = "0.6.0", optional = true }
+optimization_engine = { version = "0.7.6", optional = true }
+
+[features]
+default = [ "nlopt_optimization" ]
+nlopt_optimization = [ "nlopt" ]
+open_optimization = [ "optimization_engine" ]

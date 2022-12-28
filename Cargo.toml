@@ -20,6 +20,7 @@ members = [
 [dependencies]
 f64ad_core = {path = "f64ad_core", version = "0.0.5"}
 f64ad_core_derive = { path = "f64ad_core_derive", version = "0.0.5" }
+f64ad_optimization = { path = "f64ad_optimization", version = "0.0.1" }
 nalgebra = "0.31.1"
 # mimalloc = { version = "0.1.32", default-features = false }
 # jemallocator = "0.3.2"
@@ -31,7 +32,8 @@ nalgebra = "0.31.1"
 # tinyvec = {version = "1.6.0", features = ['alloc'] }
 # num-traits = "0.2.15"
 # timeit = "0.1.2"
-eval = "0.1.1"
+# eval = "0.1.1"
+nlopt = "0.6.0"
 
 
 [profile.dev]
