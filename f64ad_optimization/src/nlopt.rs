@@ -1,14 +1,15 @@
 use nlopt::{Algorithm, Nlopt, Target};
 use f64ad_core::f64ad::{f64ad, GlobalComputationGraphs};
 
-pub fn f64ad_optimize_nlopt(objective: Box<dyn Fn(&[f64ad]) -> f64ad>,
-                            inequality_constraints: Vec<Box<dyn Fn(&[f64ad]) -> f64ad>>,
-                            equality_constraints: Vec<Box<dyn Fn(&[f64ad]) -> f64ad>>,
-                            algorithm: Algorithm,
-                            n_dims: usize,
-                            target: Target,
-                            init_condition: &[f64]) -> (Vec<f64>, f64) {
-
+pub(crate) fn f64ad_optimize_nlopt(objective: Box<dyn Fn(&[f64ad]) -> f64ad>,
+                                   inequality_constraints: Vec<Box<dyn Fn(&[f64ad]) -> f64ad>>,
+                                   equality_constraints: Vec<Box<dyn Fn(&[f64ad]) -> f64ad>>,
+                                   algorithm: Algorithm,
+                                   n_dims: usize,
+                                   target: Target,
+                                   init_condition: &[f64],
+                                   lower_bounds: Option<&[f64]>,
+                                   upper_bounds: Option<&[f64]>) -> (Vec<f64>, f64) {
     let o = get_nlopt_function(objective);
 
     let mut nlopt = Nlopt::new(algorithm, n_dims, o, target, ());
@@ -19,6 +20,9 @@ pub fn f64ad_optimize_nlopt(objective: Box<dyn Fn(&[f64ad]) -> f64ad>,
     for equality_constraint in equality_constraints {
         nlopt.add_equality_constraint(get_nlopt_function(equality_constraint), (), 0.000001).expect("error");
     }
+
+    if let Some(lower_bounds) = lower_bounds { nlopt.set_lower_bounds(lower_bounds).expect("error"); }
+    if let Some(upper_bounds) = upper_bounds { nlopt.set_lower_bounds(upper_bounds).expect("error"); }
 
     nlopt.set_ftol_rel(0.00001).expect("error");
     nlopt.set_ftol_abs(0.00001).expect("error");
@@ -33,7 +37,7 @@ pub fn f64ad_optimize_nlopt(objective: Box<dyn Fn(&[f64ad]) -> f64ad>,
     };
 }
 
-fn get_nlopt_function (f: Box<dyn Fn(&[f64ad]) -> f64ad + 'static>) -> Box<dyn Fn(&[f64], Option<&mut [f64]>, &mut ()) -> f64> {
+fn get_nlopt_function(f: Box<dyn Fn(&[f64ad]) -> f64ad + 'static>) -> Box<dyn Fn(&[f64], Option<&mut [f64]>, &mut ()) -> f64> {
     let o = move |x: &[f64], grad: Option<&mut [f64]>, _: &mut ()| -> f64 {
         return match grad {
             None => {

@@ -8,6 +8,8 @@ use tinyvec::{tiny_vec, TinyVec};
 use once_cell::sync::OnceCell;
 use nalgebra::ComplexField;
 use rand::{Rng, thread_rng};
+use serde::{Serialize, Deserialize, Serializer, Deserializer};
+use serde::de::{Error, Visitor};
 use crate::f64ad::f64ad_var_1_mod::*;
 use crate::f64ad::f64ad_var_f_mod::{ComputationGraphF, f64ad_var_f};
 use crate::f64ad::f64ad_var_l_mod::{ComputationGraphL, f64ad_var_l, F64ADNodeL};
@@ -120,8 +122,35 @@ impl f64ad {
     pub const MIN: Self = f64ad::f64(f64::MIN);
     pub const EPSILON: Self = f64ad::f64(f64::EPSILON);
 }
+impl Serialize for f64ad {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+        serializer.serialize_f64(self.value())
+    }
+}
+impl<'de> Deserialize<'de> for f64ad {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+        deserializer.deserialize_any(F64ADVisitor)
+    }
+}
 
-#[derive(Clone, Debug, PartialEq, Eq, Copy)]
+struct F64ADVisitor;
+impl<'de> Visitor<'de> for F64ADVisitor {
+    type Value = f64ad;
+
+    fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+        formatter.write_str("expecting a float value.")
+    }
+
+    fn visit_f32<E>(self, v: f32) -> Result<Self::Value, E> where E: Error {
+        return Ok(f64ad::f64(v as f64))
+    }
+
+    fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E> where E: Error {
+        return Ok(f64ad::f64(v))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Copy, Serialize, Deserialize)]
 pub enum F64adType {
     F64,
     Var1,
@@ -129,6 +158,7 @@ pub enum F64adType {
     VarT,
     VarL
 }
+
 pub enum ComputationGraph {
     ComputationGraph1(RefCell<ComputationGraph1>),
     ComputationGraphF(RefCell<ComputationGraphF>),
@@ -293,7 +323,7 @@ impl ComputationGraph {
 unsafe impl Sync for ComputationGraph {}
 unsafe impl Send for ComputationGraph {}
 
-#[derive(Clone, Debug, PartialEq, Eq, Copy, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Copy, Hash, Serialize, Deserialize)]
 pub enum ComputationGraphType {
     ComputationGraph1,
     ComputationGraphF,
